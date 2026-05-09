@@ -16,6 +16,7 @@
   let pageLanguage = document.documentElement.lang || navigator.language || "en";
   let scanTimer = null;
   let resultCache = new Map();
+  let scanChain = Promise.resolve();
 
   function cacheResult(urlKey, result) {
     resultCache.set(urlKey, {
@@ -243,7 +244,16 @@
   }
 
 
-  const MAX_NEW_LINKS_PER_SCAN = 15;
+  const MAX_COLLECT_PER_SCAN = 72;
+  const MAX_URLS_PER_API_BATCH = 50;
+  const MAX_DOM_NODES_TOUCHED = 28000;
+  const SKIP_SUBTREE_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+  const LINKISH_DATA_ATTRS = [
+    "data-href", "data-url", "data-target", "data-target-url", "data-click-url",
+    "data-ad-url", "data-adclick-url", "data-outbound-url", "data-destination-url",
+    "data-landing-url", "data-link", "data-full-src", "data-redirect", "data-loc",
+    "data-responsive-ad-click-tracking-url", "data-goto", "data-deep-link",
+  ];
 
   function canonicalUrlForAnalysis(url) {
     try {
@@ -256,13 +266,115 @@
     }
   }
 
+  function firstHttpUrlInString(s) {
+    if (!s || typeof s !== "string") return null;
+    const m = s.match(/https?:\/\/[^\s'"<>]+/i);
+    return m ? m[0].replace(/[,);]+$/, "") : null;
+  }
+
+  const DATASET_KEY_URL_HINT = /url|href|link|click|ad|dest|target|landing|outbound|goto|redirect|src$/i;
+
+  function findHttpUrlInAncestorChain(el, depth) {
+    let n = el;
+    for (let i = 0; i < depth && n; i++) {
+      for (const name of LINKISH_DATA_ATTRS) {
+        const v = n.getAttribute?.(name);
+        if (v && /^https?:\/\//i.test(String(v).trim())) return String(v).trim();
+      }
+      const d = n.dataset;
+      if (d) {
+        for (const key of Object.keys(d)) {
+          if (!DATASET_KEY_URL_HINT.test(key)) continue;
+          const val = d[key];
+          if (typeof val === "string" && /^https?:\/\//i.test(val.trim())) return val.trim();
+        }
+      }
+      n = n.parentElement;
+    }
+    return null;
+  }
+
   function getRawLinkUrl(el) {
-    if (el.tagName === "A" || el.tagName === "AREA") return el.href;
-    if (el.dataset.href) return el.dataset.href;
-    if (el.tagName === "FORM") return el.action;
-    const onclick = el.getAttribute("onclick") || "";
-    const match = onclick.match(/(?:href|location\.href|window\.open)\s*[=(]\s*['"]([^'"]+)['"]/);
-    return match ? match[1] : null;
+    const tag = el.tagName;
+    if (tag === "A" || tag === "AREA") {
+      const attrHref = el.getAttribute("href") || "";
+      const resolved = el.href || null;
+      let preferAncestor = false;
+      try {
+        if (resolved) {
+          const p = new URL(resolved, window.location.href).protocol.toLowerCase();
+          preferAncestor = p !== "http:" && p !== "https:";
+        } else {
+          preferAncestor = true;
+        }
+      } catch {
+        preferAncestor = true;
+      }
+      if (preferAncestor) {
+        const fb =
+          findHttpUrlInAncestorChain(el, 6)
+          || firstHttpUrlInString(attrHref);
+        if (fb) return fb;
+      }
+      return resolved;
+    }
+    if (tag === "IFRAME" || tag === "FRAME") {
+      const src = el.getAttribute("src");
+      return src ? src.trim() : null;
+    }
+    if (tag === "FORM") return el.action || null;
+
+    if (el.dataset && el.dataset.href) return el.dataset.href;
+
+    for (const name of LINKISH_DATA_ATTRS) {
+      const v = el.getAttribute(name);
+      if (v && String(v).trim()) return String(v).trim();
+    }
+
+    const ont = el.getAttribute("onclick") || "";
+    const onclickPatterns = [
+      /window\.open\s*\(\s*['"]([^'"]+)['"]/,
+      /\.open\s*\(\s*['"]([^'"]+)['"]/,
+      /(?:location|document\.location)\s*(?:\.href)?\s*=\s*['"]([^'"]+)['"]/,
+      /(?:href|navigationUri)\s*[=:]\s*['"]([^'"]+)['"]/i,
+    ];
+    for (const re of onclickPatterns) {
+      const m = ont.match(re);
+      if (m?.[1]) return m[1];
+    }
+    const extracted = firstHttpUrlInString(ont);
+    if (extracted) return extracted;
+
+    return null;
+  }
+
+  function couldCarryOutboundUrl(el) {
+    const tag = el.tagName;
+    if (tag === "A" || tag === "AREA") return true;
+    if (tag === "IFRAME" || tag === "FRAME") return true;
+    if (tag === "FORM") return true;
+    if (el.getAttribute("role") === "link") return true;
+    if (tag === "BUTTON" || (tag === "INPUT" && el.type === "button")) return true;
+    if (el.hasAttribute("onclick")) return true;
+    if (LINKISH_DATA_ATTRS.some(n => el.hasAttribute(n))) return true;
+    return false;
+  }
+
+  function forEachElementDeep(root, fn, state = { stop: false, touched: 0 }) {
+    function walk(el) {
+      if (!el || state.stop || state.touched >= MAX_DOM_NODES_TOUCHED) return;
+      if (el.nodeType !== Node.ELEMENT_NODE) return;
+      if (SKIP_SUBTREE_TAGS.has(el.tagName)) return;
+      state.touched++;
+      fn(el, state);
+      if (state.stop) return;
+      const sr = el.shadowRoot;
+      if (sr) {
+        for (const child of sr.children) walk(child);
+      }
+      for (const child of el.children) walk(child);
+    }
+    if (root) walk(root);
   }
 
   function getLinkUrl(el) {
@@ -285,11 +397,13 @@
   }
 
   function collectLinks() {
-    const selectors = ["a[href]", "area[href]", "button[data-href]", "button[onclick]", "form[action]"];
     const elements = [];
+    const root = document.body || document.documentElement;
+    if (!root) return elements;
 
-    document.querySelectorAll(selectors.join(",")).forEach(el => {
-      if (elements.length >= MAX_NEW_LINKS_PER_SCAN) return;
+    const consider = (el) => {
+      if (elements.length >= MAX_COLLECT_PER_SCAN) return;
+      if (!couldCarryOutboundUrl(el)) return;
       const raw = getRawLinkUrl(el);
       if (!raw) return;
       const url = canonicalUrlForAnalysis(raw);
@@ -313,9 +427,18 @@
       if (!isAnalyzableUrl(raw)) return;
       if (el.hasAttribute(PROCESSED_ATTR)) {
         if (url && peekCache(url)) return;
+        if (el.dataset.thinklinkPending === "1") return;
         el.removeAttribute(PROCESSED_ATTR);
       }
       elements.push(el);
+    };
+
+    forEachElementDeep(root, (el, state) => {
+      if (elements.length >= MAX_COLLECT_PER_SCAN) {
+        state.stop = true;
+        return;
+      }
+      consider(el);
     });
 
     return elements;
@@ -368,7 +491,7 @@
     }
 
     const uniqueUrls = [...urlToEls.keys()];
-    const batchUrls = uniqueUrls.slice(0, MAX_NEW_LINKS_PER_SCAN);
+    const batchUrls = uniqueUrls.slice(0, MAX_URLS_PER_API_BATCH);
     const toAnalyze = [];
     for (const u of batchUrls) {
       toAnalyze.push(...urlToEls.get(u));
@@ -377,6 +500,7 @@
     toAnalyze.forEach(el => {
       const id = Math.random().toString(36).slice(2);
       el.setAttribute(PROCESSED_ATTR, id);
+      el.dataset.thinklinkPending = "1";
       injectBadge(el, "loading", null);
     });
 
@@ -415,13 +539,27 @@
 
       toAnalyze.forEach(el => {
         const url = getLinkUrl(el);
-        const row = url && peekCache(url);
+        let row = url && peekCache(url);
+        if (!row && url && Array.isArray(data.results)) {
+          const i = batchUrls.indexOf(url);
+          if (i >= 0 && data.results[i]) {
+            const r = data.results[i];
+            const key = canonicalUrlForAnalysis(r.url || "") || url;
+            cacheResult(key, { ...r, url: key });
+            row = peekCache(url) || peekCache(key);
+          }
+        }
+        delete el.dataset.thinklinkPending;
         if (row) applyResult(el, forUiResult(row));
+        else injectBadge(el, "unknown", null);
       });
 
     } catch (err) {
       console.error("[ThinkLink] Analysis failed:", err);
-      toAnalyze.forEach(el => injectBadge(el, "error", null));
+      toAnalyze.forEach(el => {
+        delete el.dataset.thinklinkPending;
+        injectBadge(el, "error", null);
+      });
     }
   }
 
@@ -450,9 +588,17 @@
   }
 
 
+  function removeThinkLinkBadgesAfter(el) {
+    let sib = el.nextElementSibling;
+    while (sib && sib.classList?.contains(BADGE_CLASS)) {
+      const next = sib.nextElementSibling;
+      sib.remove();
+      sib = next;
+    }
+  }
+
   function injectBadge(el, status, result) {
-    const existingBadge = el.parentElement?.querySelector(`.${BADGE_CLASS}[data-for="${el.getAttribute(PROCESSED_ATTR)}"]`);
-    if (existingBadge) existingBadge.remove();
+    removeThinkLinkBadgesAfter(el);
 
     const badge = document.createElement("span");
     badge.className = BADGE_CLASS;
@@ -718,18 +864,23 @@
   }
 
 
-  async function scan() {
-    if (!extensionAlive) return;
-    if (!isExtensionContextValid()) {
-      shutdownDueToInvalidContext();
-      return;
-    }
-    await syncMode();
-    if (!extensionAlive) return;
-    const elements = collectLinks();
-    if (elements.length > 0) {
-      await analyzeLinks(elements);
-    }
+  function scan() {
+    scanChain = scanChain
+      .then(async () => {
+        if (!extensionAlive) return;
+        if (!isExtensionContextValid()) {
+          shutdownDueToInvalidContext();
+          return;
+        }
+        await syncMode();
+        if (!extensionAlive) return;
+        const elements = collectLinks();
+        if (elements.length > 0) {
+          await analyzeLinks(elements);
+        }
+      })
+      .catch(err => console.error("[ThinkLink] Scan error:", err));
+    return scanChain;
   }
 
   function startScanning() {
