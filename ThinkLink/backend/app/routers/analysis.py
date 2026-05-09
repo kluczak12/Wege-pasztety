@@ -8,7 +8,7 @@ from app.models.schemas import (
     LinkAnalysisRequest,
     LinkAnalysisResult,
 )
-from app.services.analyzer import analyze_link
+from app.services.analyzer import analyze_link, sandbox_simulation_for_url
 
 router = APIRouter()
 
@@ -58,20 +58,8 @@ async def analyze_single_link(request: LinkAnalysisRequest):
 
 @router.get("/sandbox/video")
 async def get_sandbox_video(url: str = Query(..., description="URL to simulate")):
-    return JSONResponse(
-        {
-            "status": "ready",
-            "url": url,
-            "video_url": "https://example.com/sandbox/mock_recording.mp4",
-            "thumbnail_url": "https://example.com/sandbox/mock_thumb.jpg",
-            "duration_seconds": 12,
-            "events_detected": [
-                {"time": 1.2, "event": "Page load initiated"},
-                {"time": 2.5, "event": "JavaScript executed — attempted cookie access"},
-                {"time": 4.1, "event": "Redirect to third-party domain detected"},
-                {"time": 6.8, "event": "Form field auto-fill attempted"},
-                {"time": 9.3, "event": "Network request to known malware C&C server blocked"},
-            ],
-            "verdict": "DANGEROUS — multiple malicious behaviors detected in sandbox",
-        }
-    )
+    try:
+        payload = await sandbox_simulation_for_url(url)
+        return JSONResponse(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e

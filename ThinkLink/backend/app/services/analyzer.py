@@ -60,6 +60,9 @@ def _get_model() -> str:
     return _fast_model()
 
 
+def _sandbox_model() -> str:
+    return os.environ.get("GROQ_SANDBOX_MODEL", "").strip() or _fast_model()
+
 
 AI_CONCURRENCY = int(os.environ.get("AI_CONCURRENCY", "4"))
 _ai_semaphore: Optional[asyncio.Semaphore] = None
@@ -1143,6 +1146,273 @@ def _parse_ai_json(text: str) -> Dict[str, Any]:
             "threats": [],
         }
 
+
+_SANDBOX_SYSTEM_PROMPT = """You are ThinkLink's sandbox narrative generator for a browser security extension.
+
+You do NOT run a real browser. You receive a structured summary from ThinkLink's URL scanner (redirects, domain metadata, threat indicators, prior AI verdict). Your job is to produce a plausible chronological timeline AS IF a headless browser had visited the page, consistent with that evidence.
+
+Rules:
+- Output ONE JSON object only. No markdown, no commentary.
+- Keys: "verdict" (string), "duration_seconds" (number), "events_detected" (array of objects with "time" (number, seconds) and "event" (string)).
+- Use 4–8 events. Times must be strictly increasing, between ~0.5 and duration_seconds.
+- "verdict": one line, strong risk tone matching the scan. Prefix with a clear risk label in the user's language (e.g. Polish: "WYSOKIE RYZYKO —", "PODEJRZANE —"; English: "HIGH RISK —", "SUSPICIOUS —").
+- Match the "preferred_language" field from the user message ("pl", "de", or "en") for all user-visible strings.
+- Do not invent specific malware family names, exact C2 hostnames, or brands not implied by the evidence. Stay faithful to the provided indicators.
+- This is an inferred educational simulation, not a claim of real instrumentation."""
+
+
+def _guess_sandbox_locale(analysis: LinkAnalysisResult) -> str:
+    parts = [analysis.url or ""]
+    if analysis.redirect_chain and analysis.redirect_chain.final_url:
+        parts.append(analysis.redirect_chain.final_url)
+    blob = " ".join(parts).lower()
+    if ".pl" in blob:
+        return "pl"
+    if ".de" in blob or ".at" in blob:
+        return "de"
+    return "en"
+
+
+def _sandbox_evidence_pack(analysis: LinkAnalysisResult) -> Dict[str, Any]:
+    payload = analysis.model_dump(mode="json")
+    aa = payload.get("ai_assessment")
+    ai_brief: Any = None
+    if isinstance(aa, str) and aa.strip():
+        try:
+            parsed = json.loads(aa)
+            if isinstance(parsed, dict):
+                ai_brief = {
+                    k: parsed[k]
+                    for k in ("risk_level", "risk_score", "threat_type", "explanation", "threats")
+                    if k in parsed
+                }
+        except json.JSONDecodeError:
+            ai_brief = _truncate(aa, 400)
+    payload["ai_assessment_brief"] = ai_brief
+    payload.pop("ai_assessment", None)
+    payload.pop("sandbox_video_url", None)
+    return payload
+
+
+def _parse_sandbox_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if m:
+        cleaned = m.group(0)
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) -> Dict[str, Any]:
+    locale = _guess_sandbox_locale(analysis)
+    verdict = str(raw.get("verdict") or "").strip()
+    if not verdict:
+        verdict = (
+            "NIEPOTWIERDZONA SYMULACJA — model nie zwrócił werdyktu."
+            if locale == "pl"
+            else "UNCONFIRMED SIMULATION — model returned no verdict."
+        )
+    try:
+        duration = float(raw.get("duration_seconds"))
+    except (TypeError, ValueError):
+        duration = 12.0
+    duration = max(5.0, min(30.0, duration))
+
+    events_in = raw.get("events_detected") or []
+    events: List[Dict[str, Any]] = []
+    if isinstance(events_in, list):
+        for item in events_in:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ev_t = float(item.get("time"))
+            except (TypeError, ValueError):
+                continue
+            ev_text = str(item.get("event") or "").strip()
+            if not ev_text:
+                continue
+            events.append({"time": round(ev_t, 2), "event": ev_text})
+    events.sort(key=lambda x: x["time"])
+    for e in events:
+        e["time"] = max(0.2, min(float(duration) - 0.2, float(e["time"])))
+    if len(events) > 12:
+        events = events[:12]
+    if not events:
+        events = [
+            {
+                "time": 1.0,
+                "event": (
+                    "Załadowanie dokumentu (symulacja)."
+                    if locale == "pl"
+                    else "Document load (simulation)."
+                ),
+            },
+        ]
+    return {"verdict": verdict, "duration_seconds": round(duration, 1), "events_detected": events}
+
+
+def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
+    locale = _guess_sandbox_locale(analysis)
+    lvl = (
+        analysis.risk_level.value
+        if isinstance(analysis.risk_level, RiskLevel)
+        else str(analysis.risk_level)
+    )
+    indicators = list(analysis.indicators or [])
+    events: List[Dict[str, Any]] = []
+    t = 1.0
+
+    def add(msg: str) -> None:
+        nonlocal t
+        events.append({"time": round(t, 2), "event": msg})
+        t += 1.35 + (len(events) % 4) * 0.25
+
+    if locale == "pl":
+        add("Żądanie początkowe: zestawienie połączenia z hostem docelowym.")
+        if analysis.redirect_chain and analysis.redirect_chain.redirect_count:
+            add(
+                f"Wykryto łańcuch przekierowań ({analysis.redirect_chain.redirect_count} skoków)."
+            )
+        for ind in indicators[:6]:
+            add(f"Wskaźnik: {ind.description}")
+        if not indicators:
+            add("Brak szczegółowych wskaźników — oś czasu jest uproszczona.")
+        if lvl == "dangerous":
+            verdict = (
+                "WYSOKIE RYZYKO — sygnały z analizy ThinkLink wskazują na realne zagrożenie."
+            )
+        elif lvl == "suspicious":
+            verdict = "PODEJRZANE — kontekst URL i sygnały uzasadniają ostrożność."
+        else:
+            verdict = (
+                "SYMULACJA OSTROŻNOŚCI — poziom zagrożenia z analizy jest niejednoznaczny."
+            )
+    else:
+        add("Initial request: connection setup to target host.")
+        if analysis.redirect_chain and analysis.redirect_chain.redirect_count:
+            add(
+                f"Redirect chain observed ({analysis.redirect_chain.redirect_count} hops)."
+            )
+        for ind in indicators[:6]:
+            add(f"Indicator: {ind.description}")
+        if not indicators:
+            add("No detailed indicators — timeline is minimal.")
+        if lvl == "dangerous":
+            verdict = "HIGH RISK — ThinkLink scan signals suggest a real threat."
+        elif lvl == "suspicious":
+            verdict = "SUSPICIOUS — URL context and signals warrant caution."
+        else:
+            verdict = "CAUTION SIMULATION — scan risk level is inconclusive."
+
+    duration = max(8.0, min(26.0, t + 2.0))
+    for e in events:
+        e["time"] = min(e["time"], duration - 0.3)
+    return _normalize_sandbox_raw(
+        {"verdict": verdict, "duration_seconds": duration, "events_detected": events},
+        analysis,
+    )
+
+
+def _sandbox_api_response(url: str, normalized: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": "ready",
+        "url": url,
+        "video_url": None,
+        "thumbnail_url": None,
+        "duration_seconds": normalized["duration_seconds"],
+        "events_detected": normalized["events_detected"],
+        "verdict": normalized["verdict"],
+    }
+
+
+async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, Any]:
+    locale = _guess_sandbox_locale(analysis)
+    pack = _sandbox_evidence_pack(analysis)
+    user_msg = json.dumps(
+        {"preferred_language": locale, "thinklink_scan": pack},
+        ensure_ascii=False,
+        indent=2,
+    )
+    semaphore = _get_semaphore()
+    model = _sandbox_model()
+
+    try:
+        _get_client()
+    except RuntimeError:
+        fb = _heuristic_sandbox_report(analysis)
+        note = (
+            "[Ustaw GROQ_API_KEY w backend/.env] "
+            if locale == "pl"
+            else "[Set GROQ_API_KEY in backend/.env] "
+        )
+        fb["verdict"] = note + fb["verdict"]
+        return _sandbox_api_response(analysis.url, fb)
+
+    async def _call() -> Dict[str, Any]:
+        async with semaphore:
+            loop = asyncio.get_event_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: _get_client().chat.completions.create(
+                        model=model,
+                        max_tokens=700,
+                        temperature=0.2,
+                        response_format={"type": "json_object"},
+                        messages=[
+                            {"role": "system", "content": _SANDBOX_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    ),
+                ),
+                timeout=AI_TIMEOUT_SECONDS,
+            )
+        text = (response.choices[0].message.content or "").strip()
+        return _parse_sandbox_json(text)
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(2):
+        try:
+            raw = await _call()
+            if not raw:
+                raise ValueError("empty sandbox model response")
+            normalized = _normalize_sandbox_raw(raw, analysis)
+            return _sandbox_api_response(analysis.url, normalized)
+        except asyncio.TimeoutError:
+            last_exc = asyncio.TimeoutError()
+            if attempt == 0:
+                await asyncio.sleep(0.75)
+                continue
+        except Exception as e:
+            last_exc = e
+            break
+
+    fb = _heuristic_sandbox_report(analysis)
+    note = (
+        "(Groq niedostępny — raport heurystyczny.) "
+        if locale == "pl"
+        else "(Groq unavailable — heuristic report.) "
+    )
+    if last_exc:
+        note = f"({type(last_exc).__name__}) " + note
+    fb["verdict"] = note + fb["verdict"]
+    return _sandbox_api_response(analysis.url, fb)
+
+
+async def sandbox_simulation_for_url(url: str) -> Dict[str, Any]:
+    if not url or not str(url).strip():
+        raise ValueError("url is required")
+    canonical = _canonical_url(url.strip())
+    analysis = await analyze_link(LinkAnalysisRequest(url=canonical))
+    return await _groq_sandbox_simulation(analysis)
 
 
 def _coerce_level(value: Any) -> RiskLevel:
