@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ThinkLink</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup-container" role="main">
+
+    <header class="popup-header">
+      <span class="popup-logo" aria-hidden="true">🛡️</span>
+      <h1 class="popup-title">ThinkLink</h1>
+    </header>
+
+    <section class="mode-section" aria-labelledby="mode-label">
+      <p id="mode-label" class="section-label">Mode</p>
+      <div class="mode-toggle" role="radiogroup" aria-label="Select protection mode">
+        <button
+          id="btn-simple"
+          class="mode-btn active"
+          role="radio"
+          aria-checked="true"
+          data-mode="simple"
+          type="button"
+        >
+          <span class="mode-icon">👶</span>
+          <span class="mode-name" data-i18n="mode_simple">Simple</span>
+          <span class="mode-desc" data-i18n="mode_simple_desc">Block &amp; show icons</span>
+        </button>
+        <button
+          id="btn-expert"
+          class="mode-btn"
+          role="radio"
+          aria-checked="false"
+          data-mode="expert"
+          type="button"
+        >
+          <span class="mode-icon">🔬</span>
+          <span class="mode-name" data-i18n="mode_expert">Expert</span>
+          <span class="mode-desc" data-i18n="mode_expert_desc">Reports &amp; sandbox</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="stats-section" aria-labelledby="stats-label">
+      <p id="stats-label" class="section-label" data-i18n="stats_title">Protection Stats</p>
+      <div class="stats-grid">
+        <div class="stat-card" aria-label="Total threats blocked">
+          <span class="stat-value" id="stat-total">0</span>
+          <span class="stat-label" data-i18n="stat_blocked">Blocked</span>
+        </div>
+        <div class="stat-card stat-card--session" aria-label="Threats blocked this session">
+          <span class="stat-value" id="stat-session">0</span>
+          <span class="stat-label" data-i18n="stat_session">This session</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="history-section" aria-labelledby="history-label">
+      <div class="history-header">
+        <p id="history-label" class="section-label" data-i18n="history_title">Recent Threats</p>
+        <button class="clear-btn" id="btn-clear" type="button" data-i18n="clear_btn">Clear</button>
+      </div>
+      <ul class="history-list" id="history-list" aria-label="Recent blocked threats" aria-live="polite">
+        <li class="history-empty" data-i18n="history_empty">No threats blocked yet.</li>
+      </ul>
+    </section>
+
+    <footer class="popup-footer">
+      <span class="footer-text" data-i18n="footer_text">AI-powered protection</span>
+      <button class="reset-btn" id="btn-reset" type="button" data-i18n="reset_btn">Reset counter</button>
+    </footer>
+
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
