@@ -81,7 +81,6 @@
         "Still unclassified — ThinkLink will retry automatically. If this stays, the URL could not be checked (e.g. invalid or non-web link).",
       blocked_tooltip: "This link was blocked by ThinkLink because it was flagged as dangerous.",
       report_btn: "Show Report",
-      video_btn: "Sandbox Preview",
       loading: "Checking…",
       aria_safe: "Safe link",
       aria_danger: "Dangerous link — click blocked",
@@ -93,7 +92,9 @@
         "No base-scan text was stored — the sandbox summary follows in this section.",
       report_assessment_title: "Scan & sandbox",
       report_sandbox_short_title: "Sandbox summary",
-      report_sandbox_see_button: "Full timeline: open “Sandbox Preview”.",
+      report_sandbox_timeline_title: "Sandbox timeline",
+      sandbox_simulating: "Simulating visit to:",
+      sandbox_detected_events: "Detected Events",
     },
     pl: {
       safe: "Bezpieczne",
@@ -104,7 +105,6 @@
         "Bez klasyfikacji — ThinkLink ponowi próbę. Jeśli nadal widać ten znaczek, linku nie dało się sprawdzić.",
       blocked_tooltip: "Ten link został zablokowany przez ThinkLink, ponieważ został oznaczony jako niebezpieczny.",
       report_btn: "Pokaż raport",
-      video_btn: "Podgląd w sandboxie",
       loading: "Sprawdzam…",
       aria_safe: "Bezpieczny link",
       aria_danger: "Niebezpieczny link — kliknięcie zablokowane",
@@ -116,7 +116,9 @@
         "Brak zapisanego opisu skanu — skrót sandbox jest niżej w tej sekcji.",
       report_assessment_title: "Skan i sandbox",
       report_sandbox_short_title: "Skrót sandbox",
-      report_sandbox_see_button: "Pełną oś czasu otworzysz przyciskiem „Podgląd w sandboxie”.",
+      report_sandbox_timeline_title: "Oś czasu sandbox",
+      sandbox_simulating: "Symulacja wizyty pod adresem:",
+      sandbox_detected_events: "Wykryte zdarzenia",
     },
     de: {
       safe: "Sicher",
@@ -127,7 +129,6 @@
         "Noch nicht eingestuft — ThinkLink versucht es erneut. Bleibt das, ließ sich die URL nicht prüfen.",
       blocked_tooltip: "Dieser Link wurde von ThinkLink blockiert, da er als gefährlich eingestuft wurde.",
       report_btn: "Bericht anzeigen",
-      video_btn: "Sandbox-Vorschau",
       loading: "Prüfe…",
       aria_safe: "Sicherer Link",
       aria_danger: "Gefährlicher Link — Klick blockiert",
@@ -139,7 +140,9 @@
         "Kein gespeicherter Scan-Text — die Sandbox-Kurzfassung steht weiter unten in diesem Abschnitt.",
       report_assessment_title: "Scan & Sandbox",
       report_sandbox_short_title: "Sandbox-Kurzfassung",
-      report_sandbox_see_button: "Vollständige Zeitleiste über „Sandbox-Vorschau“.",
+      report_sandbox_timeline_title: "Sandbox-Zeitleiste",
+      sandbox_simulating: "Simulierter Besuch unter:",
+      sandbox_detected_events: "Erkannte Ereignisse",
     }
   };
 
@@ -183,7 +186,35 @@
         <p class="tl-ai-sandbox-kicker">${t("report_sandbox_short_title")}</p>
         <p class="tl-ai-sandbox-verdict-line">${levelPart}${level ? " · " : ""}<span class="tl-ai-sandbox-verdict-text">${escapeHtml(v)}</span></p>
         ${hint}
-        <p class="tl-ai-sandbox-pointer"><em>${t("report_sandbox_see_button")}</em></p>
+      </div>
+    `;
+  }
+
+  function sandboxFullTimelineHtml(sandboxData, result) {
+    if (!sandboxData?.verdict || !Array.isArray(sandboxData.events_detected)) return "";
+    const riskClass = riskLevelClass(result.risk_level);
+    const u = result.url || "";
+    const urlDisplay = `${u.slice(0, 80)}${u.length > 80 ? "…" : ""}`;
+    const eventsHtml = sandboxData.events_detected
+      .map(
+        ev => `
+        <li class="tl-sandbox-event">
+          <span class="tl-sandbox-time">${escapeHtml(ev.time)}s</span>
+          <span>${escapeHtml(ev.event)}</span>
+        </li>
+      `
+      )
+      .join("");
+    return `
+      <div class="tl-report-sandbox">
+        <h4 class="tl-sandbox-timeline-heading">${escapeHtml(t("report_sandbox_timeline_title"))}</h4>
+        <p class="tl-sandbox-url"><em>${escapeHtml(t("sandbox_simulating"))}</em><br><code>${escapeHtml(urlDisplay)}</code></p>
+        <div class="tl-sandbox-content">
+          <div class="tl-sandbox-verdict tl-risk-${riskClass}">${escapeHtml(sandboxData.verdict)}</div>
+          <h4 class="tl-sandbox-events-heading">${escapeHtml(t("sandbox_detected_events"))}</h4>
+          <ul class="tl-sandbox-events">${eventsHtml}</ul>
+          <p class="tl-sandbox-note"><em>${escapeHtml(t("report_sandbox_disclaimer"))}</em></p>
+        </div>
       </div>
     `;
   }
@@ -713,18 +744,7 @@
       void showReportModal(result);
     });
 
-    const videoBtn = document.createElement("button");
-    videoBtn.className = "tl-btn tl-btn-video";
-    videoBtn.textContent = t("video_btn");
-    videoBtn.setAttribute("type", "button");
-    videoBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      showSandboxModal(result);
-    });
-
     controls.appendChild(reportBtn);
-    controls.appendChild(videoBtn);
     return controls;
   }
 
@@ -779,7 +799,10 @@
 
     let sandboxData = result.sandbox_assessment;
     const rl = String(result.risk_level || "").toLowerCase();
-    if (!sandboxData && (rl === "dangerous" || rl === "suspicious")) {
+    const needsSandboxFetch =
+      (rl === "dangerous" || rl === "suspicious") &&
+      (!sandboxData?.verdict || !Array.isArray(sandboxData.events_detected));
+    if (needsSandboxFetch) {
       try {
         const apiResult = await sendThinkLinkApi({
           type: "THINKLINK_API",
@@ -835,16 +858,25 @@
 
     const exp = (aiData.explanation || "").trim();
     const hasAiExplanation = Boolean(exp);
-    const hasSandboxSummary = Boolean(sandboxData && sandboxData.verdict);
+    const hasFullSandboxTimeline = Boolean(
+      sandboxData?.verdict && Array.isArray(sandboxData.events_detected)
+    );
+    const hasSandboxSummaryOnly = Boolean(sandboxData?.verdict) && !hasFullSandboxTimeline;
     const hasThreatType = Boolean(aiData.threat_type);
-    const showAiSection = hasAiExplanation || hasSandboxSummary || hasThreatType;
+    const showAiSection =
+      hasAiExplanation ||
+      hasThreatType ||
+      hasFullSandboxTimeline ||
+      hasSandboxSummaryOnly ||
+      ((rl === "dangerous" || rl === "suspicious") && !sandboxData?.verdict);
     const aiSectionHtml = showAiSection
       ? `
           <div class="tl-section">
             <h3>${t("report_assessment_title")}</h3>
             ${hasAiExplanation ? `<p class="tl-ai-text">${escapeHtml(exp)}</p>` : ""}
             ${
-              !hasAiExplanation && (hasSandboxSummary || hasThreatType)
+              !hasAiExplanation &&
+              (hasThreatType || hasSandboxSummaryOnly || hasFullSandboxTimeline)
                 ? `<p class="tl-ai-text tl-ai-muted">${escapeHtml(t("report_ai_no_model"))}</p>`
                 : ""
             }
@@ -853,9 +885,10 @@
                 ? `<span class="tl-threat-type">Threat type: <strong>${escapeHtml(aiData.threat_type)}</strong></span>`
                 : ""
             }
-            ${hasSandboxSummary ? sandboxInlineSummaryHtml(sandboxData) : ""}
+            ${hasFullSandboxTimeline ? sandboxFullTimelineHtml(sandboxData, result) : ""}
+            ${hasSandboxSummaryOnly ? sandboxInlineSummaryHtml(sandboxData) : ""}
             ${
-              (rl === "dangerous" || rl === "suspicious") && !hasSandboxSummary
+              (rl === "dangerous" || rl === "suspicious") && !sandboxData?.verdict
                 ? `<p class="tl-sandbox-unavailable">${escapeHtml(t("report_sandbox_unavailable"))}</p>`
                 : ""
             }
@@ -898,114 +931,6 @@
     document.body.appendChild(modal);
 
     modal.querySelector(".tl-modal-close").focus();
-  }
-
-  async function showSandboxModal(result) {
-    removeModal();
-    const cached = result.sandbox_assessment;
-    if (cached && cached.verdict && Array.isArray(cached.events_detected)) {
-      const modal = document.createElement("div");
-      modal.className = "tl-modal-overlay";
-      modal.setAttribute("role", "dialog");
-      modal.setAttribute("aria-modal", "true");
-      modal.setAttribute("aria-label", "ThinkLink Sandbox Preview");
-      const eventsHtml = cached.events_detected
-        .map(
-          ev => `
-        <li class="tl-sandbox-event">
-          <span class="tl-sandbox-time">${escapeHtml(ev.time)}s</span>
-          <span>${escapeHtml(ev.event)}</span>
-        </li>
-      `
-        )
-        .join("");
-      modal.innerHTML = `
-      <div class="tl-modal tl-sandbox-modal">
-        <div class="tl-modal-header">
-          <h2>🔬 Sandbox Preview</h2>
-          <button class="tl-modal-close" aria-label="Close" type="button">✕</button>
-        </div>
-        <div class="tl-modal-body">
-          <p class="tl-sandbox-url"><em>Simulating visit to:</em><br><code>${result.url.slice(0, 80)}</code></p>
-          <div class="tl-sandbox-content">
-            <div class="tl-sandbox-verdict tl-risk-${riskLevelClass(result.risk_level)}">${escapeHtml(cached.verdict)}</div>
-            <h3>Detected Events</h3>
-            <ul class="tl-sandbox-events">${eventsHtml}</ul>
-            <p class="tl-sandbox-note">
-              <em>${t("report_sandbox_disclaimer")}</em>
-            </p>
-          </div>
-        </div>
-      </div>
-    `;
-      modal.querySelector(".tl-modal-close").addEventListener("click", removeModal);
-      modal.addEventListener("click", (e) => { if (e.target === modal) removeModal(); });
-      document.body.appendChild(modal);
-      modal.querySelector(".tl-modal-close").focus();
-      return;
-    }
-
-    const modal = document.createElement("div");
-    modal.className = "tl-modal-overlay";
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-modal", "true");
-    modal.setAttribute("aria-label", "ThinkLink Sandbox Preview");
-
-    modal.innerHTML = `
-      <div class="tl-modal tl-sandbox-modal">
-        <div class="tl-modal-header">
-          <h2>🔬 Sandbox Preview</h2>
-          <button class="tl-modal-close" aria-label="Close" type="button">✕</button>
-        </div>
-        <div class="tl-modal-body">
-          <p class="tl-sandbox-url"><em>Simulating visit to:</em><br><code>${result.url.slice(0, 80)}</code></p>
-          <div class="tl-sandbox-loading">
-            <div class="tl-sandbox-spinner"></div>
-            <span>Loading sandbox simulation…</span>
-          </div>
-          <div class="tl-sandbox-content" style="display:none"></div>
-        </div>
-      </div>
-    `;
-    modal.querySelector(".tl-modal-close").addEventListener("click", removeModal);
-    modal.addEventListener("click", (e) => { if (e.target === modal) removeModal(); });
-    document.body.appendChild(modal);
-
-    try {
-      const apiResult = await sendThinkLinkApi({
-        type: "THINKLINK_API",
-        method: "GET",
-        url: `${API_BASE}/sandbox/video?url=${encodeURIComponent(result.url)}`,
-        timeoutMs: 60000,
-      });
-      if (!apiResult.ok) throw new Error(apiResult.error || "sandbox request failed");
-      const data = apiResult.data;
-
-      const content = modal.querySelector(".tl-sandbox-content");
-      const loading = modal.querySelector(".tl-sandbox-loading");
-
-      const eventsHtml = data.events_detected.map(ev => `
-        <li class="tl-sandbox-event">
-          <span class="tl-sandbox-time">${ev.time}s</span>
-          <span>${ev.event}</span>
-        </li>
-      `).join("");
-
-      content.innerHTML = `
-        <div class="tl-sandbox-verdict tl-risk-${result.risk_level}">${data.verdict}</div>
-        <h3>Detected Events</h3>
-        <ul class="tl-sandbox-events">${eventsHtml}</ul>
-        <p class="tl-sandbox-note">
-          <em>ℹ️ In production, a real browser recording would be shown here. 
-          This is a mock simulation based on static analysis.</em>
-        </p>
-      `;
-      loading.style.display = "none";
-      content.style.display = "block";
-    } catch {
-      modal.querySelector(".tl-sandbox-loading").innerHTML =
-        "<p>Sandbox simulation unavailable. Make sure the backend is running.</p>";
-    }
   }
 
   function removeModal() {

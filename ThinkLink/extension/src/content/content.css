@@ -82,7 +82,6 @@
 .tl-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 
 .tl-btn-report { background: #1d4ed8; color: #fff; }
-.tl-btn-video  { background: #7c3aed; color: #fff; }
 
 .tl-blocked-notice {
   position: fixed;
@@ -366,12 +365,6 @@
   border-left: 3px solid #c4b5fd;
 }
 
-.tl-ai-sandbox-pointer {
-  margin: 0;
-  font-size: 11px;
-  color: #6b7280;
-}
-
 .tl-threat-type {
   font-size: 12px;
   color: #6b7280;
@@ -442,9 +435,21 @@
   min-width: 38px;
 }
 
+.tl-report-sandbox {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
 .tl-report-sandbox h4.tl-sandbox-timeline-heading {
-  margin: 12px 0 6px;
+  margin: 0 0 8px;
   font-size: 14px;
+  font-weight: 600;
+}
+
+.tl-report-sandbox .tl-sandbox-events-heading {
+  margin: 10px 0 8px;
+  font-size: 13px;
   font-weight: 600;
 }
 

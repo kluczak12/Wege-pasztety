@@ -120,6 +120,14 @@ MAX_BODY_SAMPLE_BYTES = 3000
 
 AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", "60"))
 
+
+def _sandbox_ai_timeout_seconds() -> int:
+    """Groq sandbox narrative call; allow separate (often higher) limit than main AI."""
+    raw = os.environ.get("SANDBOX_AI_TIMEOUT_SECONDS", "").strip()
+    if raw:
+        return max(15, int(raw))
+    return max(AI_TIMEOUT_SECONDS, int(os.environ.get("SANDBOX_AI_TIMEOUT_FALLBACK", "90")))
+
 _TRUSTED_REGISTERED_DOMAINS_RAW = """
 empik.com allegro.pl ceneo.pl olx.pl otomoto.pl onet.pl wp.pl interia.pl
 gazeta.pl github.com gitlab.com microsoft.com apple.com google.com youtube.com
@@ -1094,6 +1102,29 @@ def _sandbox_evidence_pack(analysis: LinkAnalysisResult) -> Dict[str, Any]:
     payload["ai_assessment_brief"] = ai_brief
     payload.pop("ai_assessment", None)
     payload.pop("sandbox_video_url", None)
+    # Same scan as main heuristic — explicit digest so the LLM aligns timeline with codes/signals.
+    lvl_v = (
+        analysis.risk_level.value
+        if isinstance(analysis.risk_level, RiskLevel)
+        else str(analysis.risk_level)
+    )
+    payload["sandbox_llm_digest"] = {
+        "risk_level": lvl_v,
+        "risk_score": round(float(analysis.risk_score), 4),
+        "indicator_codes_in_order": [i.code for i in (analysis.indicators or [])],
+        "redirect_hops": (
+            len(analysis.redirect_chain.hops)
+            if analysis.redirect_chain and analysis.redirect_chain.hops
+            else 0
+        ),
+        "domain_registered": (
+            analysis.domain_info.domain if analysis.domain_info else None
+        ),
+        "domain_age_days": (
+            analysis.domain_info.age_days if analysis.domain_info else None
+        ),
+        "file_download_hint": analysis.file_download,
+    }
     return payload
 
 
@@ -1173,6 +1204,182 @@ def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) ->
     }
 
 
+def _loc_msg(locale: str, pl: str, de: str, en: str) -> str:
+    if locale == "pl":
+        return pl
+    if locale == "de":
+        return de
+    return en
+
+
+def _heuristic_sandbox_timeline_messages(
+    analysis: LinkAnalysisResult,
+    locale: str,
+    *,
+    max_events: int = 12,
+) -> List[str]:
+    """Same underlying scan as main heuristics — surface redirects, WHOIS, scores, all indicators."""
+    lvl = (
+        analysis.risk_level.value
+        if isinstance(analysis.risk_level, RiskLevel)
+        else str(analysis.risk_level)
+    )
+    indicators = list(analysis.indicators or [])
+    lines: List[str] = []
+
+    lines.append(
+        _loc_msg(
+            locale,
+            "Żądanie początkowe: zestawienie połączenia z hostem docelowym.",
+            "Erste Anfrage: Verbindungsaufbau zum Zielhost.",
+            "Initial request: connection setup to target host.",
+        )
+    )
+
+    pct = round(float(analysis.risk_score or 0) * 100)
+    lines.append(
+        _loc_msg(
+            locale,
+            f"Heurystyka ThinkLink: poziom {lvl.upper()}, szacowane ryzyko ~{pct}%.",
+            f"ThinkLink-Heuristik: {lvl.upper()}, geschätztes Risiko ~{pct}%.",
+            f"ThinkLink heuristic: {lvl.upper()}, estimated risk ~{pct}%.",
+        )
+    )
+
+    rc = analysis.redirect_chain
+    if rc and rc.redirect_count and rc.hops:
+        lines.append(
+            _loc_msg(
+                locale,
+                f"Łańcuch przekierowań: {rc.redirect_count} skok(ów).",
+                f"Umleitungskette: {rc.redirect_count} Sprünge.",
+                f"Redirect chain: {rc.redirect_count} hop(s).",
+            )
+        )
+        for i, hop in enumerate(rc.hops[:4], start=1):
+            if len(lines) >= max_events - 1:
+                break
+            show = hop if len(hop) <= 76 else hop[:73] + "…"
+            lines.append(
+                _loc_msg(
+                    locale,
+                    f"Hop #{i}: {show}",
+                    f"Hop {i}: {show}",
+                    f"Hop {i}: {show}",
+                )
+            )
+
+    di = analysis.domain_info
+    if di and len(lines) < max_events:
+        lines.append(
+            _loc_msg(
+                locale,
+                f"Domena (registered): {di.domain}",
+                f"Registrierte Domain: {di.domain}",
+                f"Registered domain: {di.domain}",
+            )
+        )
+        if di.age_days is not None and len(lines) < max_events:
+            lines.append(
+                _loc_msg(
+                    locale,
+                    f"Szacowany wiek rejestracji WHOIS: ~{di.age_days} dni.",
+                    f"Geschätztes WHOIS-Alter: ~{di.age_days} Tage.",
+                    f"Estimated WHOIS registration age: ~{di.age_days} days.",
+                )
+            )
+        if di.is_very_new and len(lines) < max_events:
+            lines.append(
+                _loc_msg(
+                    locale,
+                    "Bardzo świeża domena — zwiększona ostrożność.",
+                    "Sehr neue Domain — erhöhte Vorsicht.",
+                    "Very new domain — elevated caution.",
+                )
+            )
+        elif di.is_new and len(lines) < max_events:
+            lines.append(
+                _loc_msg(
+                    locale,
+                    "Domena stosunkowo nowa (< 30 dni).",
+                    "Domain relativ neu (< 30 Tage).",
+                    "Relatively new domain (< 30 days).",
+                )
+            )
+        if di.country and len(lines) < max_events:
+            lines.append(
+                _loc_msg(
+                    locale,
+                    f"Kraj rejestracji (WHOIS): {di.country}",
+                    f"Registrierungsland (WHOIS): {di.country}",
+                    f"Registration country (WHOIS): {di.country}",
+                )
+            )
+
+    if analysis.file_download and len(lines) < max_events:
+        ext = str(analysis.file_download).lstrip(".")
+        lines.append(
+            _loc_msg(
+                locale,
+                f"Odpowiedź sugeruje plik do pobrania (typ: .{ext}).",
+                f"Antwort deutet auf Download hin (Typ: .{ext}).",
+                f"Response suggests a file download (type: .{ext}).",
+            )
+        )
+
+    for ind in indicators:
+        if len(lines) >= max_events:
+            break
+        lines.append(
+            _loc_msg(
+                locale,
+                f"Wskaźnik [{ind.code}] ({ind.severity}): {ind.description}",
+                f"Indikator [{ind.code}] ({ind.severity}): {ind.description}",
+                f"Indicator [{ind.code}] ({ind.severity}): {ind.description}",
+            )
+        )
+
+    if not indicators and len(lines) < max_events:
+        lines.append(
+            _loc_msg(
+                locale,
+                "Brak osobnych rekordów wskaźników — klasyfikacja opiera się na ogólnych sygnałach.",
+                "Keine einzelnen Indikatoren — Klassifikation aus allgemeinen Signalen.",
+                "No separate indicator rows — classification uses aggregate signals.",
+            )
+        )
+
+    return lines[:max_events]
+
+
+def _heuristic_sandbox_verdict(locale: str, lvl: str) -> str:
+    if locale == "pl":
+        if lvl == "dangerous":
+            return (
+                "WYSOKIE RYZYKO — sygnały z analizy ThinkLink wskazują na realne zagrożenie."
+            )
+        if lvl == "suspicious":
+            return "PODEJRZANE — kontekst URL i sygnały uzasadniają ostrożność."
+        return (
+            "SYMULACJA OSTROŻNOŚCI — poziom zagrożenia z analizy jest niejednoznaczny."
+        )
+    if locale == "de":
+        if lvl == "dangerous":
+            return (
+                "HOHES RISIKO — ThinkLink-Scan deutet auf eine reale Bedrohung hin."
+            )
+        if lvl == "suspicious":
+            return "VERDACHT — URL-Kontext und Signale rechtfahren Vorsicht."
+        return (
+            "VORSICHT — Risikoniveau aus dem Scan nicht eindeutig."
+        )
+    if lvl == "dangerous":
+        return "HIGH RISK — ThinkLink scan signals suggest a real threat."
+    if lvl == "suspicious":
+        return "SUSPICIOUS — URL context and signals warrant caution."
+    return "CAUTION SIMULATION — scan risk level is inconclusive."
+
+
 def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
     locale = _guess_sandbox_locale(analysis)
     lvl = (
@@ -1180,51 +1387,19 @@ def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
         if isinstance(analysis.risk_level, RiskLevel)
         else str(analysis.risk_level)
     )
-    indicators = list(analysis.indicators or [])
+    msgs = _heuristic_sandbox_timeline_messages(analysis, locale, max_events=12)
     events: List[Dict[str, Any]] = []
     t = 1.0
 
     def add(msg: str) -> None:
         nonlocal t
         events.append({"time": round(t, 2), "event": msg})
-        t += 1.35 + (len(events) % 4) * 0.25
+        t += 1.15 + (len(events) % 5) * 0.12
 
-    if locale == "pl":
-        add("Żądanie początkowe: zestawienie połączenia z hostem docelowym.")
-        if analysis.redirect_chain and analysis.redirect_chain.redirect_count:
-            add(
-                f"Wykryto łańcuch przekierowań ({analysis.redirect_chain.redirect_count} skoków)."
-            )
-        for ind in indicators[:6]:
-            add(f"Wskaźnik: {ind.description}")
-        if not indicators:
-            add("Brak szczegółowych wskaźników — oś czasu jest uproszczona.")
-        if lvl == "dangerous":
-            verdict = (
-                "WYSOKIE RYZYKO — sygnały z analizy ThinkLink wskazują na realne zagrożenie."
-            )
-        elif lvl == "suspicious":
-            verdict = "PODEJRZANE — kontekst URL i sygnały uzasadniają ostrożność."
-        else:
-            verdict = (
-                "SYMULACJA OSTROŻNOŚCI — poziom zagrożenia z analizy jest niejednoznaczny."
-            )
-    else:
-        add("Initial request: connection setup to target host.")
-        if analysis.redirect_chain and analysis.redirect_chain.redirect_count:
-            add(
-                f"Redirect chain observed ({analysis.redirect_chain.redirect_count} hops)."
-            )
-        for ind in indicators[:6]:
-            add(f"Indicator: {ind.description}")
-        if not indicators:
-            add("No detailed indicators — timeline is minimal.")
-        if lvl == "dangerous":
-            verdict = "HIGH RISK — ThinkLink scan signals suggest a real threat."
-        elif lvl == "suspicious":
-            verdict = "SUSPICIOUS — URL context and signals warrant caution."
-        else:
-            verdict = "CAUTION SIMULATION — scan risk level is inconclusive."
+    for m in msgs:
+        add(m)
+
+    verdict = _heuristic_sandbox_verdict(locale, lvl)
 
     duration = max(8.0, min(26.0, t + 2.0))
     for e in events:
@@ -1297,7 +1472,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
                         ],
                     ),
                 ),
-                timeout=AI_TIMEOUT_SECONDS,
+                timeout=float(_sandbox_ai_timeout_seconds()),
             )
         text = (response.choices[0].message.content or "").strip()
         return _parse_sandbox_json(text)
