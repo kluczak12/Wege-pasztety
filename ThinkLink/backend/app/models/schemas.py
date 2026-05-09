@@ -43,6 +43,18 @@ class ThreatIndicator(BaseModel):
     severity: str
 
 
+class SandboxTimelineEvent(BaseModel):
+    time: float
+    event: str
+
+
+class SandboxAssessment(BaseModel):
+    verdict: str
+    duration_seconds: float
+    events_detected: List[SandboxTimelineEvent]
+    assessed_risk_level: Optional[str] = None
+
+
 class LinkAnalysisResult(BaseModel):
     url: str
     risk_level: RiskLevel
@@ -54,6 +66,7 @@ class LinkAnalysisResult(BaseModel):
     ai_assessment: Optional[str] = None
     file_download: Optional[str] = None
     sandbox_video_url: Optional[str] = None
+    sandbox_assessment: Optional[SandboxAssessment] = None
 
 
 class BatchAnalysisResult(BaseModel):

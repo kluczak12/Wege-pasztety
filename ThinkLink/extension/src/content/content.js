@@ -86,6 +86,14 @@
       aria_safe: "Safe link",
       aria_danger: "Dangerous link — click blocked",
       aria_suspicious: "Suspicious link — proceed with caution",
+      report_sandbox_disclaimer:
+        "Timeline is inferred from the same scan data as this report, not from a real browser recording.",
+      report_sandbox_unavailable: "Sandbox details unavailable.",
+      report_ai_no_model:
+        "No base-scan text was stored — the sandbox summary follows in this section.",
+      report_assessment_title: "Scan & sandbox",
+      report_sandbox_short_title: "Sandbox summary",
+      report_sandbox_see_button: "Full timeline: open “Sandbox Preview”.",
     },
     pl: {
       safe: "Bezpieczne",
@@ -101,6 +109,14 @@
       aria_safe: "Bezpieczny link",
       aria_danger: "Niebezpieczny link — kliknięcie zablokowane",
       aria_suspicious: "Podejrzany link — zachowaj ostrożność",
+      report_sandbox_disclaimer:
+        "Oś czasu jest wnioskowana z tych samych danych skanowania co ten raport, a nie z nagrania przeglądarki.",
+      report_sandbox_unavailable: "Szczegóły sandbox niedostępne.",
+      report_ai_no_model:
+        "Brak zapisanego opisu skanu — skrót sandbox jest niżej w tej sekcji.",
+      report_assessment_title: "Skan i sandbox",
+      report_sandbox_short_title: "Skrót sandbox",
+      report_sandbox_see_button: "Pełną oś czasu otworzysz przyciskiem „Podgląd w sandboxie”.",
     },
     de: {
       safe: "Sicher",
@@ -116,12 +132,60 @@
       aria_safe: "Sicherer Link",
       aria_danger: "Gefährlicher Link — Klick blockiert",
       aria_suspicious: "Verdächtiger Link — Vorsicht geboten",
+      report_sandbox_disclaimer:
+        "Die Zeitleiste leitet sich von denselben Scan-Daten wie dieser Bericht ab, nicht von einer echten Browseraufzeichnung.",
+      report_sandbox_unavailable: "Sandbox-Details nicht verfügbar.",
+      report_ai_no_model:
+        "Kein gespeicherter Scan-Text — die Sandbox-Kurzfassung steht weiter unten in diesem Abschnitt.",
+      report_assessment_title: "Scan & Sandbox",
+      report_sandbox_short_title: "Sandbox-Kurzfassung",
+      report_sandbox_see_button: "Vollständige Zeitleiste über „Sandbox-Vorschau“.",
     }
   };
 
   function t(key) {
     const lang = pageLanguage.slice(0, 2).toLowerCase();
     return (TRANSLATIONS[lang] || TRANSLATIONS["en"])[key] || TRANSLATIONS["en"][key] || key;
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function riskLevelClass(level) {
+    const s = String(level || "unknown").toLowerCase();
+    return ["safe", "suspicious", "dangerous", "unknown"].includes(s) ? s : "unknown";
+  }
+
+  function sandboxInlineSummaryHtml(sandboxData) {
+    if (!sandboxData || !sandboxData.verdict) return "";
+    let v = String(sandboxData.verdict).replace(/\s+/g, " ").trim();
+    if (v.length > 220) v = `${v.slice(0, 217)}…`;
+    const level = sandboxData.assessed_risk_level;
+    const levelPart = level
+      ? `<span class="tl-ai-sandbox-level tl-risk-${riskLevelClass(level)}">${escapeHtml(level)}</span>`
+      : "";
+    const evs = Array.isArray(sandboxData.events_detected) ? sandboxData.events_detected : [];
+    const skipRe = /^(initial request|żądanie początkowe|page request)/i;
+    const pick = evs.find((e) => e && e.event && !skipRe.test(String(e.event)));
+    let hint = "";
+    if (pick && pick.event) {
+      let h = String(pick.event).replace(/\s+/g, " ").trim();
+      if (h.length > 150) h = `${h.slice(0, 147)}…`;
+      hint = `<p class="tl-ai-sandbox-hint">${escapeHtml(h)}</p>`;
+    }
+    return `
+      <div class="tl-ai-sandbox-inline">
+        <p class="tl-ai-sandbox-kicker">${t("report_sandbox_short_title")}</p>
+        <p class="tl-ai-sandbox-verdict-line">${levelPart}${level ? " · " : ""}<span class="tl-ai-sandbox-verdict-text">${escapeHtml(v)}</span></p>
+        ${hint}
+        <p class="tl-ai-sandbox-pointer"><em>${t("report_sandbox_see_button")}</em></p>
+      </div>
+    `;
   }
 
 
@@ -646,7 +710,7 @@
     reportBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showReportModal(result);
+      void showReportModal(result);
     });
 
     const videoBtn = document.createElement("button");
@@ -708,10 +772,33 @@
   }
 
 
-  function showReportModal(result) {
+  async function showReportModal(result) {
     removeModal();
     let aiData = {};
     try { aiData = JSON.parse(result.ai_assessment || "{}"); } catch {}
+
+    let sandboxData = result.sandbox_assessment;
+    const rl = String(result.risk_level || "").toLowerCase();
+    if (!sandboxData && (rl === "dangerous" || rl === "suspicious")) {
+      try {
+        const apiResult = await sendThinkLinkApi({
+          type: "THINKLINK_API",
+          method: "GET",
+          url: `${API_BASE}/sandbox/video?url=${encodeURIComponent(result.url)}`,
+          timeoutMs: 60000,
+        });
+        if (apiResult.ok && apiResult.data) {
+          sandboxData = {
+            verdict: apiResult.data.verdict,
+            duration_seconds: apiResult.data.duration_seconds,
+            events_detected: apiResult.data.events_detected,
+            assessed_risk_level: apiResult.data.assessed_risk_level,
+          };
+        }
+      } catch {
+        /* keep sandboxData empty */
+      }
+    }
 
     const severityColor = { low: "#f59e0b", medium: "#f97316", high: "#ef4444", critical: "#b91c1c" };
 
@@ -746,6 +833,36 @@
       </div>
     ` : "";
 
+    const exp = (aiData.explanation || "").trim();
+    const hasAiExplanation = Boolean(exp);
+    const hasSandboxSummary = Boolean(sandboxData && sandboxData.verdict);
+    const hasThreatType = Boolean(aiData.threat_type);
+    const showAiSection = hasAiExplanation || hasSandboxSummary || hasThreatType;
+    const aiSectionHtml = showAiSection
+      ? `
+          <div class="tl-section">
+            <h3>${t("report_assessment_title")}</h3>
+            ${hasAiExplanation ? `<p class="tl-ai-text">${escapeHtml(exp)}</p>` : ""}
+            ${
+              !hasAiExplanation && (hasSandboxSummary || hasThreatType)
+                ? `<p class="tl-ai-text tl-ai-muted">${escapeHtml(t("report_ai_no_model"))}</p>`
+                : ""
+            }
+            ${
+              hasThreatType
+                ? `<span class="tl-threat-type">Threat type: <strong>${escapeHtml(aiData.threat_type)}</strong></span>`
+                : ""
+            }
+            ${hasSandboxSummary ? sandboxInlineSummaryHtml(sandboxData) : ""}
+            ${
+              (rl === "dangerous" || rl === "suspicious") && !hasSandboxSummary
+                ? `<p class="tl-sandbox-unavailable">${escapeHtml(t("report_sandbox_unavailable"))}</p>`
+                : ""
+            }
+          </div>
+        `
+      : "";
+
     const modal = document.createElement("div");
     modal.className = "tl-modal-overlay";
     modal.setAttribute("role", "dialog");
@@ -772,12 +889,7 @@
           </div>
           ${domainHtml}
           ${redirectHtml}
-          ${aiData.explanation ? `
-          <div class="tl-section">
-            <h3>AI Analysis</h3>
-            <p class="tl-ai-text">${aiData.explanation}</p>
-            ${aiData.threat_type ? `<span class="tl-threat-type">Threat type: <strong>${aiData.threat_type}</strong></span>` : ""}
-          </div>` : ""}
+          ${aiSectionHtml}
         </div>
       </div>
     `;
@@ -790,6 +902,49 @@
 
   async function showSandboxModal(result) {
     removeModal();
+    const cached = result.sandbox_assessment;
+    if (cached && cached.verdict && Array.isArray(cached.events_detected)) {
+      const modal = document.createElement("div");
+      modal.className = "tl-modal-overlay";
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      modal.setAttribute("aria-label", "ThinkLink Sandbox Preview");
+      const eventsHtml = cached.events_detected
+        .map(
+          ev => `
+        <li class="tl-sandbox-event">
+          <span class="tl-sandbox-time">${escapeHtml(ev.time)}s</span>
+          <span>${escapeHtml(ev.event)}</span>
+        </li>
+      `
+        )
+        .join("");
+      modal.innerHTML = `
+      <div class="tl-modal tl-sandbox-modal">
+        <div class="tl-modal-header">
+          <h2>🔬 Sandbox Preview</h2>
+          <button class="tl-modal-close" aria-label="Close" type="button">✕</button>
+        </div>
+        <div class="tl-modal-body">
+          <p class="tl-sandbox-url"><em>Simulating visit to:</em><br><code>${result.url.slice(0, 80)}</code></p>
+          <div class="tl-sandbox-content">
+            <div class="tl-sandbox-verdict tl-risk-${riskLevelClass(result.risk_level)}">${escapeHtml(cached.verdict)}</div>
+            <h3>Detected Events</h3>
+            <ul class="tl-sandbox-events">${eventsHtml}</ul>
+            <p class="tl-sandbox-note">
+              <em>${t("report_sandbox_disclaimer")}</em>
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+      modal.querySelector(".tl-modal-close").addEventListener("click", removeModal);
+      modal.addEventListener("click", (e) => { if (e.target === modal) removeModal(); });
+      document.body.appendChild(modal);
+      modal.querySelector(".tl-modal-close").focus();
+      return;
+    }
+
     const modal = document.createElement("div");
     modal.className = "tl-modal-overlay";
     modal.setAttribute("role", "dialog");

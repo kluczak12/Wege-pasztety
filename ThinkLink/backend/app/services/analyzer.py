@@ -15,8 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.models.schemas import (
-    LinkAnalysisResult, RiskLevel, ThreatIndicator,
-    RedirectChain, DomainInfo, LinkAnalysisRequest
+    LinkAnalysisResult,
+    RiskLevel,
+    ThreatIndicator,
+    RedirectChain,
+    DomainInfo,
+    LinkAnalysisRequest,
+    SandboxAssessment,
+    SandboxTimelineEvent,
 )
 
 _groq_client = None
@@ -45,19 +51,10 @@ def _get_client():
 
 
 DEFAULT_FAST_MODEL = "llama-3.1-8b-instant"
-DEFAULT_DEEP_MODEL = "llama-3.3-70b-versatile"
 
 
 def _fast_model() -> str:
     return os.environ.get("GROQ_MODEL", "").strip() or DEFAULT_FAST_MODEL
-
-
-def _deep_model() -> str:
-    return os.environ.get("GROQ_DEEP_MODEL", "").strip() or DEFAULT_DEEP_MODEL
-
-
-def _get_model() -> str:
-    return _fast_model()
 
 
 def _sandbox_model() -> str:
@@ -256,7 +253,7 @@ def _heuristic_refine_unknown(
                 description="Redirect chain downgrades from HTTPS to HTTP.",
                 severity="high",
             )],
-            "Heuristic: TLS downgrade in redirect chain.",
+            "Scan: TLS downgrade in redirect chain.",
         )
 
     if fetch_error or final_status is None:
@@ -268,7 +265,7 @@ def _heuristic_refine_unknown(
                 description=str(fetch_error or "No HTTP response from destination"),
                 severity="medium",
             )],
-            "Heuristic: link could not be loaded for verification.",
+            "Scan: destination could not be reached from the scanner.",
         )
 
     if (
@@ -286,7 +283,7 @@ def _heuristic_refine_unknown(
                 ),
                 severity="low",
             )],
-            f"Heuristic: HTTP {final_status} treated as bot protection, not a malware signal.",
+            f"Scan: HTTP {final_status} treated as bot protection, not a malware signal.",
         )
 
     if isinstance(final_status, int) and final_status >= 400:
@@ -298,7 +295,7 @@ def _heuristic_refine_unknown(
                 description=f"Destination returned HTTP {final_status}",
                 severity="medium",
             )],
-            f"Heuristic: HTTP status {final_status}.",
+            f"Scan: HTTP status {final_status}.",
         )
 
     if evidence.get("redirect_insecure_hops"):
@@ -310,7 +307,7 @@ def _heuristic_refine_unknown(
                 description="Redirect path includes HTTP after the first hop.",
                 severity="medium",
             )],
-            "Heuristic: insecure redirect hop detected.",
+            "Scan: insecure redirect hop detected.",
         )
 
     if is_risky_tld and not well_known:
@@ -320,10 +317,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.34 if sev == "medium" else 0.26),
             [ThreatIndicator(
                 code="HIGH_RISK_TLD",
-                description=f"TLD {tld} is commonly abused; AI verdict was unclear.",
+                description=f"TLD {tld} is commonly abused; treat with extra caution.",
                 severity=sev,
             )],
-            "Heuristic: risky TLD without a clear AI verdict.",
+            "Scan: high-risk TLD pattern with limited reputation context.",
         )
 
     very_new = age is not None and age < 7
@@ -336,7 +333,7 @@ def _heuristic_refine_unknown(
                 description="Domain registered within the last 7 days.",
                 severity="medium",
             )],
-            "Heuristic: very new domain registration.",
+            "Scan: very new domain registration.",
         )
 
     try:
@@ -357,7 +354,7 @@ def _heuristic_refine_unknown(
             RiskLevel.SAFE,
             min(max(risk_score, 0.08), 0.16),
             [],
-            "Heuristic: HTTPS OK and no high-risk signals (AI verdict was unclear).",
+            "Scan: HTTPS OK and no strong static risk signals.",
         )
 
     if scheme == "http" and not well_known:
@@ -369,7 +366,7 @@ def _heuristic_refine_unknown(
                 description="Final URL uses unencrypted HTTP.",
                 severity="low",
             )],
-            "Heuristic: destination is HTTP-only.",
+            "Scan: destination is HTTP-only.",
         )
 
     return (
@@ -377,11 +374,136 @@ def _heuristic_refine_unknown(
         max(risk_score, 0.24),
         [ThreatIndicator(
             code="UNVERIFIED_LINK",
-            description="No confident AI verdict; basic checks found no critical issues.",
+            description="Static checks found no critical issues; classification remains cautious.",
             severity="low",
         )],
-        "Heuristic-only: inconclusive AI — marked cautious instead of unknown.",
+        "Scan: no strong safe/unsafe match — marked cautious.",
     )
+
+
+def _explanation_lang_from_evidence(evidence: Dict[str, Any]) -> str:
+    blob = f"{evidence.get('url') or ''} {evidence.get('final_url') or ''}".lower()
+    ctx = (evidence.get("context_text") or "")[:300].lower()
+    comb = f"{blob} {ctx}"
+    if ".pl" in comb or any(
+        ch in comb for ch in ("ą", "ć", "ę", "ł", "ń", "ó", "ś", "ź", "ż")
+    ):
+        return "pl"
+    if ".de" in comb or ".at" in comb:
+        return "de"
+    return "en"
+
+
+def _base_scan_explanation(
+    lang: str,
+    level: str,
+    well_known: bool,
+    evidence: Dict[str, Any],
+) -> str:
+    fe = bool(evidence.get("fetch_error") or evidence.get("http_status") is None)
+    if lang == "pl":
+        if level == "dangerous":
+            return (
+                "Wykryto silne sygnały ryzyka w automatycznej ocenie "
+                "(struktura linku, sonda HTTP lub domena)."
+            )
+        if level == "suspicious":
+            return (
+                "Automatyczna weryfikacja wykazała sygnały ostrzegawcze; "
+                "zobacz wskaźniki i skrót sandbox."
+            )
+        if well_known and level == "unknown":
+            return (
+                "Host jest rozpoznawalny; skan ma ograniczone dane techniczne "
+                "— sandbox może doprecyzować wynik."
+            )
+        if fe:
+            return (
+                "Skaner nie połączył się z adresem docelowym; "
+                "ocena opiera się na dostępnych sygnałach."
+            )
+        return (
+            "Wstępna klasyfikacja jest niejednoznaczna na podstawie danych skanowania."
+        )
+    if lang == "de":
+        if level == "dangerous":
+            return (
+                "Die automatische Prüfung zeigt starke Risikosignale "
+                "(URL-Struktur, HTTP-Probe oder Domain)."
+            )
+        if level == "suspicious":
+            return (
+                "Die automatische Prüfung zeigt Vorsichtssignale; "
+                "siehe Indikatoren und Sandbox-Kurzfassung."
+            )
+        if well_known and level == "unknown":
+            return (
+                "Weit verbreiteter Host; begrenzte technische Daten — "
+                "Sandbox kann das Ergebnis verfeinern."
+            )
+        if fe:
+            return (
+                "Der Scanner erreichte das Ziel nicht; "
+                "die Einschätzung stützt sich nur auf verfügbare Signale."
+            )
+        return "Vorläufige Einordnung aus den Scan-Daten nicht eindeutig."
+
+    if level == "dangerous":
+        return (
+            "Strong risk signals from the automated link check "
+            "(URL structure, HTTP probe, or domain metadata)."
+        )
+    if level == "suspicious":
+        return (
+            "The automated check found cautionary signals; "
+            "review indicators and the sandbox summary."
+        )
+    if well_known and level == "unknown":
+        return (
+            "Widely recognized host; limited technical data from this scan — "
+            "sandbox may refine the result."
+        )
+    if fe:
+        return (
+            "The scanner could not reach the destination; "
+            "assessment uses available signals only."
+        )
+    return "Preliminary classification is inconclusive from the current scan data."
+
+
+def _base_scan_verdict(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """URL shape, probe, and domain metadata — no LLM. Sandbox adds the AI layer."""
+    signals = evidence.get("url_shape_indicators") or []
+    has_high = any(i.get("severity") in ("high", "critical") for i in signals)
+    has_medium_up = any(
+        i.get("severity") in ("high", "critical", "medium") for i in signals
+    )
+    has_any = bool(signals)
+    domain_age = evidence.get("domain_age_days")
+    is_new_domain = domain_age is not None and domain_age < 30
+    is_executable = evidence.get("is_executable_extension", False)
+    well_known = _is_well_known_domain(evidence)
+    hard = _has_hard_red_flags_evidence(evidence)
+
+    if hard or has_high or is_executable or (is_new_domain and has_medium_up):
+        level, score = "dangerous", 0.7
+    elif has_any or is_new_domain:
+        level, score = "suspicious", 0.45
+    elif well_known:
+        level, score = "unknown", 0.12
+    else:
+        level, score = "unknown", 0.18
+
+    lang = _explanation_lang_from_evidence(evidence)
+    explanation = _base_scan_explanation(lang, level, well_known, evidence)
+
+    return {
+        "risk_level": level,
+        "risk_score": score,
+        "threat_type": "unknown",
+        "explanation": explanation,
+        "threats": [],
+    }
 
 
 async def analyze_link(request: LinkAnalysisRequest) -> LinkAnalysisResult:
@@ -524,7 +646,7 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
         ],
     }
 
-    verdict = await _ai_verdict(evidence)
+    verdict = _base_scan_verdict(evidence)
 
     for t in verdict.get("threats") or []:
         try:
@@ -588,8 +710,65 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
         file_download_field = effective_extension
 
     sandbox_video_url = None
+    sandbox_assessment: Optional[SandboxAssessment] = None
+    verdict_out = dict(verdict)
+
     if risk_level in (RiskLevel.DANGEROUS, RiskLevel.SUSPICIOUS):
         sandbox_video_url = f"http://localhost:8000/api/v1/sandbox/video?url={url}"
+        provisional = LinkAnalysisResult(
+            url=url,
+            risk_level=risk_level,
+            risk_score=round(risk_score, 3),
+            is_safe=risk_level == RiskLevel.SAFE,
+            indicators=indicators,
+            redirect_chain=redirect_chain,
+            domain_info=domain_info if isinstance(domain_info, DomainInfo) else None,
+            ai_assessment=json.dumps(verdict_out, ensure_ascii=False),
+            file_download=file_download_field,
+            sandbox_video_url=sandbox_video_url,
+            sandbox_assessment=None,
+        )
+        sb_api = await _groq_sandbox_simulation(provisional)
+        evs = sb_api.get("events_detected") or []
+        try:
+            sandbox_assessment = SandboxAssessment(
+                verdict=str(sb_api.get("verdict") or ""),
+                duration_seconds=float(sb_api.get("duration_seconds") or 12),
+                events_detected=[
+                    SandboxTimelineEvent(time=float(e["time"]), event=str(e["event"]))
+                    for e in evs
+                    if isinstance(e, dict) and "time" in e and "event" in e
+                ],
+                assessed_risk_level=sb_api.get("assessed_risk_level"),
+            )
+        except Exception:
+            sandbox_assessment = None
+
+        assessed_raw = (
+            sandbox_assessment.assessed_risk_level if sandbox_assessment else None
+        )
+        old_lvl, old_sc = risk_level, risk_score
+        risk_level, risk_score = _merge_risk_with_sandbox(
+            risk_level, risk_score, assessed_raw
+        )
+        if risk_level != old_lvl or risk_score > old_sc + 0.01:
+            verdict_out["risk_level"] = risk_level.value
+            verdict_out["risk_score"] = round(risk_score, 3)
+            expl_prev = str(verdict_out.get("explanation") or "").strip()
+            if "sandbox" not in expl_prev.lower():
+                loc = _guess_sandbox_locale(provisional)
+                note = (
+                    "Dodatkowa ocena symulacji sandbox podnosi klasyfikację ryzyka."
+                    if loc == "pl"
+                    else (
+                        "Die Sandbox-Simulation stuft das Risiko höher ein."
+                        if loc == "de"
+                        else "Sandbox simulation assessment raises the risk classification."
+                    )
+                )
+                verdict_out["explanation"] = (
+                    (expl_prev + " " + note).strip() if expl_prev else note
+                )
 
     return LinkAnalysisResult(
         url=url,
@@ -599,9 +778,10 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
         indicators=indicators,
         redirect_chain=redirect_chain,
         domain_info=domain_info if isinstance(domain_info, DomainInfo) else None,
-        ai_assessment=json.dumps(verdict, ensure_ascii=False),
+        ai_assessment=json.dumps(verdict_out, ensure_ascii=False),
         file_download=file_download_field,
         sandbox_video_url=sandbox_video_url,
+        sandbox_assessment=sandbox_assessment,
     )
 
 
@@ -870,290 +1050,13 @@ async def _get_domain_info(domain: str) -> Optional[DomainInfo]:
 
 
 
-_AI_SYSTEM_PROMPT = """You are ThinkLink, a senior security analyst deciding whether a URL is safe to follow.
-
-Balance accuracy: flag real phishing, malware, and scams clearly, but do NOT alarm users for ordinary commerce, news, blogs, or well-known services. A boring marketing redirect or empty body sample on a reputable host is usually fine. When evidence is weak or ambiguous and the domain looks legitimate, prefer "safe" with a low score or "unknown" — do not default to "suspicious" for normal web noise.
-
-You receive an evidence pack with:
-- The original URL and the final URL after redirects
-- The full redirect chain (each hop's domain)
-- HTTP response headers (Content-Type, Content-Disposition, server, status)
-- A sample of the response body (HTML/text/JSON, possibly truncated)
-- Domain age and registrar from WHOIS (when available)
-- url_shape_indicators detected statically — these are SIGNALS, not verdicts
-- Optional surrounding page text the user clicked from
-
-DECISION RULES (apply in order):
-
-1) HARD DANGEROUS triggers — return "dangerous" if ANY of these holds:
-   - URL/final domain is a homoglyph or lookalike of a known brand
-     (e.g. "paypa1.com", "аllegro.pl" with Cyrillic, "microsft.com",
-     "empik-platnosc.com", "allegro-zaplata.xyz", "ing-bank.security-login.top").
-   - Body content references a known brand (logo, name, login form, "Sign in
-     to <Brand>") but the registered_domain is NOT that brand's actual
-     primary domain or recognized CDN.
-   - Domain registered < 14 days AND any of: login form, payment form,
-     parcel-tracking page, "verify your account", "delivery fee" copy,
-     instructions to install an APK, executable download.
-   - URL serves an executable (.exe/.msi/.apk/.dmg/.bat/.scr/.jar) AND the
-     domain is NOT a recognized vendor or established platform (GitHub
-     releases, Microsoft, Apple, Google, Mozilla, official vendor sites,
-     well-known download mirrors). Random hosts, file-sharing services
-     used as primary delivery, fresh domains — all dangerous.
-   - IP_ADDRESS_URL or AT_SIGN_IN_URL signal is present.
-   - redirect_protocol_downgrade is true (the chain went HTTPS -> HTTP at
-     some point — the request can be intercepted on the network).
-   - Final domain mismatches the brand strongly implied by the original
-     URL or the surrounding click context (e.g. user clicked from an
-     "Empik" tracking link but final domain is unrelated and not an Empik
-     property).
-
-2) SUSPICIOUS triggers — return "suspicious" if ANY:
-   - Domain age < 60 days and the page is anything transactional
-     (login, signup, checkout, support).
-   - .xyz / .top / .click / .work / .loan / .download / .tk / .ml / .ga /
-     .cf / .gq / .icu and similar bulk TLDs hosting transactional content.
-   - Heavy URL encoding, very long subdomain combined with brand keywords.
-   - Body sample is empty, error page, or unreachable but URL shape has
-     any signals.
-   - Mismatched content type vs URL extension (e.g. URL ends in .pdf but
-     server returns text/html with login form).
-   - redirect_insecure_hops is true (the chain transits an HTTP hop after
-     starting on HTTPS — the request can be intercepted).
-
-3) REDIRECTS — IMPORTANT, READ CAREFULLY:
-   Most redirects on the modern web are SAFE. Tracking redirects, OAuth
-   handoffs, link shorteners, marketing campaigns, ad networks, regional
-   redirects, www <-> apex, http <-> https upgrades, brand subdomain to
-   apex (tracking.empik.com -> empik.com) — ALL NORMAL.
-   Do NOT flag a URL as suspicious or dangerous merely because:
-     * it has many hops (3, 5, 8 hops can all be perfectly legitimate)
-     * the hops cross different registered domains
-     * a shortener is involved
-     * the final domain is different from the original
-   ONLY treat redirects as a security signal when:
-     * redirect_protocol_downgrade is true (HTTPS -> HTTP somewhere in the
-       chain) -> this is a DANGEROUS signal, treat per rule 1.
-     * redirect_insecure_hops is true (HTTP appears after the first hop) ->
-       SUSPICIOUS per rule 2.
-     * the FINAL URL itself meets a DANGEROUS or SUSPICIOUS trigger from
-       rule 1 or 2 (lookalike domain, brand-new domain with login form,
-       executable on random host, etc.) — in which case judge the final
-       destination on its own merits. The redirect itself is not the issue,
-       the destination is.
-
-4) SAFE — only when ALL of these hold:
-   - registered_domain matches a recognized brand/service
-     (empik.com, allegro.pl, ceneo.pl, olx.pl, otomoto.pl, onet.pl, wp.pl,
-     interia.pl, gazeta.pl, github.com, gitlab.com, microsoft.com,
-     apple.com, google.com, youtube.com, amazon.com, amazon.de, amazon.pl,
-     facebook.com, instagram.com, linkedin.com, x.com, twitter.com,
-     reddit.com, stackoverflow.com, wikipedia.org, mozilla.org,
-     cloudflare.com, akamai.net, netflix.com, spotify.com, paypal.com,
-     stripe.com, dropbox.com, ikea.com, ing.pl, mbank.pl, pko.pl,
-     santander.pl, pekao.com.pl, millennium.pl, t-mobile.pl, orange.pl,
-     play.pl, plus.pl, poczta-polska.pl, dpd.com.pl, inpost.pl,
-     stock.adobe.com, adobe.com, behance.net, dribbble.com),
-     OR is a recognized CDN/infrastructure host of one of these
-     (media-amazon.com, ssl-images-amazon.com, fbcdn.net, twimg.com,
-     ggpht.com, googleusercontent.com, gstatic.com, akamaihd.net,
-     cloudfront.net subdomains belonging to a known service, etc.).
-   - AND body content / page is consistent with that brand's normal
-     product (e.g. e-commerce listing, article, official login page).
-   - AND no DANGEROUS or SUSPICIOUS triggers apply.
-
-5) BRAND-MATCH RULE (CRITICAL):
-   The presence of a brand name in the BODY does NOT make a URL safe.
-   Brand-mention only counts as positive evidence if the registered_domain
-   matches that brand's known domain. A login page that says "PayPal" on
-   `paypal-secure.xyz` is phishing, not PayPal.
-
-6) UNKNOWN — use when the probe failed or data is insufficient and the
-   domain is not recognizable. If the host is a well-known brand or major
-   platform and only the body sample is missing, still judge "safe" when
-   nothing else looks wrong. Reserve "suspicious" for concrete reasons, not
-   for missing optional data alone on reputable sites.
-
-Output format — ONLY a single JSON object, no markdown, no commentary:
-
-{
-  "risk_level": "safe" | "suspicious" | "dangerous",
-  "risk_score": <float 0.0-1.0; safe < 0.20, suspicious in [0.20, 0.60),
-                  dangerous >= 0.60>,
-  "threat_type": "phishing" | "malware" | "scam" | "suspicious" | "clean",
-  "explanation": "<1-2 sentences in the language of the page (Polish if
-                  context_text or body_sample is Polish, otherwise English),
-                  written for a non-technical user, naming the specific
-                  reason — e.g. 'Domena zarejestrowana 3 dni temu i prosi
-                  o dane karty.'>",
-  "threats": [
-    {"code": "<SHORT_UPPER_CODE>", "description": "<short>", "severity": "low|medium|high|critical"}
-  ]
-}
-
-The "threats" list should contain only ACTUAL threats you identified, not
-the raw url_shape_indicators. If verdict is safe, return [].
-"""
-
-
-async def _ai_verdict(evidence: Dict[str, Any]) -> Dict[str, Any]:
-    user_msg = (
-        "Analyze this URL and return JSON only.\n\n"
-        "EVIDENCE PACK:\n"
-        + json.dumps(evidence, ensure_ascii=False, default=str, indent=2)
-    )
-
-    semaphore = _get_semaphore()
-
-    async def _call(model: str) -> Dict[str, Any]:
-        last_exc: Optional[BaseException] = None
-        for attempt in range(2):
-            try:
-                async with semaphore:
-                    loop = asyncio.get_event_loop()
-                    response = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda m=model: _get_client().chat.completions.create(
-                                model=m,
-                                max_tokens=500,
-                                temperature=0.1,
-                                response_format={"type": "json_object"},
-                                messages=[
-                                    {"role": "system", "content": _AI_SYSTEM_PROMPT},
-                                    {"role": "user", "content": user_msg},
-                                ],
-                            ),
-                        ),
-                        timeout=AI_TIMEOUT_SECONDS,
-                    )
-                text = (response.choices[0].message.content or "").strip()
-                return _parse_ai_json(text)
-            except asyncio.TimeoutError:
-                if attempt == 0:
-                    await asyncio.sleep(0.75)
-                    continue
-                raise
-            except Exception:
-                raise
-        raise RuntimeError("Groq call retry exhausted")
-
-    try:
-        verdict = await _call(_fast_model())
-
-        level = str(verdict.get("risk_level", "")).lower()
-        score = _coerce_score(verdict.get("risk_score"))
-        threats = verdict.get("threats") or []
-        is_confidently_safe = (
-            level == "safe" and score <= 0.32 and not threats
-        )
-        well_known = _is_well_known_domain(evidence)
-        fast_safe_enough_for_trusted = (
-            well_known
-            and not _has_hard_red_flags_evidence(evidence)
-            and level == "safe"
-            and score <= 0.40
-            and not threats
-        )
-        if fast_safe_enough_for_trusted:
-            return verdict
-        if is_confidently_safe and well_known:
-            return verdict
-
-        if _fast_model() == _deep_model():
-            return verdict
-
-        try:
-            deep_verdict = await _call(_deep_model())
-            return deep_verdict
-        except Exception:
-            return verdict
-
-    except Exception as e:
-        signals = evidence.get("url_shape_indicators") or []
-        has_high = any(i.get("severity") in ("high", "critical") for i in signals)
-        has_medium_up = any(
-            i.get("severity") in ("high", "critical", "medium") for i in signals
-        )
-        has_any = bool(signals)
-        domain_age = evidence.get("domain_age_days")
-        is_new_domain = domain_age is not None and domain_age < 30
-        is_executable = evidence.get("is_executable_extension", False)
-        well_known = _is_well_known_domain(evidence)
-        hard = _has_hard_red_flags_evidence(evidence)
-
-        if hard or has_high or is_executable or (is_new_domain and has_medium_up):
-            level, score = "dangerous", 0.7
-        elif has_any or is_new_domain:
-            level, score = "suspicious", 0.45
-        elif well_known:
-            level, score = "unknown", 0.12
-        else:
-            level, score = "unknown", 0.18
-
-        threat_sev = "medium" if level == "dangerous" else "low"
-        return {
-            "risk_level": level,
-            "risk_score": score,
-            "threat_type": "unknown",
-            "explanation": (
-                f"AI analysis unavailable ({type(e).__name__}). "
-                + (
-                    "Well-known host — low concern pending a retry."
-                    if well_known and level == "unknown"
-                    else "Heuristic-only assessment — verify if unsure."
-                )
-            ),
-            "threats": [{
-                "code": "AI_UNAVAILABLE",
-                "description": "Real-time AI verdict could not be obtained; using light URL heuristics only.",
-                "severity": threat_sev,
-            }],
-        }
-
-
-def _parse_ai_json(text: str) -> Dict[str, Any]:
-    if not text:
-        return {"risk_level": "unknown", "risk_score": 0.0,
-                "threat_type": "unknown",
-                "explanation": "Empty AI response.", "threats": []}
-
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-
-    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if m:
-        cleaned = m.group(0)
-
-    try:
-        data = json.loads(cleaned)
-        if not isinstance(data, dict):
-            raise ValueError("Top-level JSON is not an object")
-        data.setdefault("risk_level", "unknown")
-        data.setdefault("risk_score", 0.0)
-        data.setdefault("threat_type", "unknown")
-        data.setdefault("explanation", "")
-        data.setdefault("threats", [])
-        return data
-    except Exception as e:
-        return {
-            "risk_level": "unknown",
-            "risk_score": 0.0,
-            "threat_type": "unknown",
-            "explanation": f"Could not parse AI response: {e}",
-            "threats": [],
-        }
-
-
 _SANDBOX_SYSTEM_PROMPT = """You are ThinkLink's sandbox narrative generator for a browser security extension.
 
-You do NOT run a real browser. You receive a structured summary from ThinkLink's URL scanner (redirects, domain metadata, threat indicators, prior AI verdict). Your job is to produce a plausible chronological timeline AS IF a headless browser had visited the page, consistent with that evidence.
+You do NOT run a real browser. You receive a structured summary from ThinkLink's URL scanner (redirects, domain metadata, threat indicators, and the base automated verdict fields in ai_assessment_brief). Your job is to produce a plausible chronological timeline AS IF a headless browser had visited the page, consistent with that evidence.
 
 Rules:
 - Output ONE JSON object only. No markdown, no commentary.
-- Keys: "verdict" (string), "duration_seconds" (number), "events_detected" (array of objects with "time" (number, seconds) and "event" (string)).
+- Keys: "verdict" (string), "duration_seconds" (number), "events_detected" (array of objects with "time" (number, seconds) and "event" (string)), "assessed_risk_level" (string: exactly one of "safe", "suspicious", "dangerous" — your summary of threat from the same evidence; must align with the verdict).
 - Use 4–8 events. Times must be strictly increasing, between ~0.5 and duration_seconds.
 - "verdict": one line, strong risk tone matching the scan. Prefix with a clear risk label in the user's language (e.g. Polish: "WYSOKIE RYZYKO —", "PODEJRZANE —"; English: "HIGH RISK —", "SUSPICIOUS —").
 - Match the "preferred_language" field from the user message ("pl", "de", or "en") for all user-visible strings.
@@ -1256,7 +1159,18 @@ def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) ->
                 ),
             },
         ]
-    return {"verdict": verdict, "duration_seconds": round(duration, 1), "events_detected": events}
+    assessed: Optional[str] = None
+    ar = raw.get("assessed_risk_level")
+    if isinstance(ar, str):
+        a = ar.lower().strip()
+        if a in ("safe", "suspicious", "dangerous"):
+            assessed = a
+    return {
+        "verdict": verdict,
+        "duration_seconds": round(duration, 1),
+        "events_detected": events,
+        "assessed_risk_level": assessed,
+    }
 
 
 def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
@@ -1315,14 +1229,20 @@ def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
     duration = max(8.0, min(26.0, t + 2.0))
     for e in events:
         e["time"] = min(e["time"], duration - 0.3)
+    assessed_out = lvl if lvl in ("dangerous", "suspicious", "safe") else "suspicious"
     return _normalize_sandbox_raw(
-        {"verdict": verdict, "duration_seconds": duration, "events_detected": events},
+        {
+            "verdict": verdict,
+            "duration_seconds": duration,
+            "events_detected": events,
+            "assessed_risk_level": assessed_out,
+        },
         analysis,
     )
 
 
 def _sandbox_api_response(url: str, normalized: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    out: Dict[str, Any] = {
         "status": "ready",
         "url": url,
         "video_url": None,
@@ -1331,6 +1251,10 @@ def _sandbox_api_response(url: str, normalized: Dict[str, Any]) -> Dict[str, Any
         "events_detected": normalized["events_detected"],
         "verdict": normalized["verdict"],
     }
+    ar = normalized.get("assessed_risk_level")
+    if ar:
+        out["assessed_risk_level"] = ar
+    return out
 
 
 async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, Any]:
@@ -1364,7 +1288,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
                     None,
                     lambda: _get_client().chat.completions.create(
                         model=model,
-                        max_tokens=700,
+                        max_tokens=800,
                         temperature=0.2,
                         response_format={"type": "json_object"},
                         messages=[
@@ -1397,9 +1321,9 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
 
     fb = _heuristic_sandbox_report(analysis)
     note = (
-        "(Groq niedostępny — raport heurystyczny.) "
+        "(API sandbox niedostępne — podgląd z samych danych skanu.) "
         if locale == "pl"
-        else "(Groq unavailable — heuristic report.) "
+        else "(Sandbox API unavailable — timeline from scan data only.) "
     )
     if last_exc:
         note = f"({type(last_exc).__name__}) " + note
@@ -1445,6 +1369,28 @@ _LEVEL_RANK = {
 
 def _max_level(a: RiskLevel, b: RiskLevel) -> RiskLevel:
     return a if _LEVEL_RANK.get(a, 0) >= _LEVEL_RANK.get(b, 0) else b
+
+
+def _merge_risk_with_sandbox(
+    risk_level: RiskLevel,
+    risk_score: float,
+    sandbox_assessed: Optional[str],
+) -> Tuple[RiskLevel, float]:
+    if not sandbox_assessed:
+        return risk_level, risk_score
+    s = str(sandbox_assessed).lower().strip()
+    if s not in ("safe", "suspicious", "dangerous"):
+        return risk_level, risk_score
+    sb_level = _coerce_level(s)
+    if sb_level == RiskLevel.UNKNOWN:
+        return risk_level, risk_score
+    merged = _max_level(risk_level, sb_level)
+    new_score = risk_score
+    if merged == RiskLevel.DANGEROUS:
+        new_score = max(risk_score, 0.62)
+    elif merged == RiskLevel.SUSPICIOUS:
+        new_score = max(risk_score, 0.25)
+    return merged, new_score
 
 
 def _coerce_score(value: Any) -> float:
