@@ -1,0 +1,363 @@
+/* Panel antyphishing — ładowany w Shadow DOM (:host), izolacja od CSS strony (np. Yahoo). */
+
+:host {
+  all: initial;
+  display: block;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #0f172a;
+  box-sizing: border-box;
+  --tlpp-z: 2147483647;
+  --tlpp-bg: #0f172a;
+  --tlpp-panel-bg: #f8fafc;
+  --tlpp-text: #0f172a;
+  --tlpp-muted: #64748b;
+  --tlpp-accent: #2563eb;
+  --tlpp-border: #e2e8f0;
+  --tlpp-low: #16a34a;
+  --tlpp-med: #d97706;
+  --tlpp-high: #dc2626;
+}
+
+:host *,
+:host *::before,
+:host *::after {
+  box-sizing: border-box;
+}
+
+:host .tlpp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: var(--tlpp-z);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+
+:host(.tlpp-open) .tlpp-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+:host .tlpp-tab {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: calc(var(--tlpp-z) + 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 6px;
+  min-width: 44px;
+  border: none;
+  border-radius: 10px 0 0 10px;
+  background: var(--tlpp-bg);
+  color: #f1f5f9 !important;
+  cursor: pointer;
+  box-shadow: -2px 4px 16px rgba(0, 0, 0, 0.2);
+  font-family: inherit !important;
+  font-size: 14px !important;
+}
+
+:host .tlpp-tab:hover {
+  background: #1e293b;
+}
+
+:host .tlpp-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+:host .tlpp-tab-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+:host .tlpp-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 100vw);
+  height: 100vh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 20px 20px 28px;
+  background: var(--tlpp-panel-bg) !important;
+  color: var(--tlpp-text) !important;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.18);
+  z-index: calc(var(--tlpp-z) + 2);
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+}
+
+:host(.tlpp-open) .tlpp-panel {
+  transform: translateX(0);
+}
+
+:host .tlpp-head {
+  position: relative;
+  padding-right: 36px;
+  margin-bottom: 14px;
+}
+
+:host .tlpp-title {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--tlpp-text) !important;
+}
+
+:host .tlpp-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tlpp-muted) !important;
+}
+
+:host .tlpp-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tlpp-muted) !important;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+:host .tlpp-close:hover {
+  background: var(--tlpp-border);
+  color: var(--tlpp-text) !important;
+}
+
+:host .tlpp-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--tlpp-muted) !important;
+}
+
+/* Jawny kolor tekstu — strony typu Yahoo nadpisują textarea przez globalne reguły */
+:host .tlpp-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--tlpp-border);
+  border-radius: 10px;
+  font-family: inherit !important;
+  font-size: 14px !important;
+  line-height: 1.45 !important;
+  resize: vertical;
+  min-height: 160px;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a !important;
+  caret-color: #0f172a !important;
+}
+
+:host .tlpp-textarea::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+
+:host .tlpp-textarea:focus {
+  outline: 2px solid var(--tlpp-accent);
+  outline-offset: 1px;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a !important;
+}
+
+:host .tlpp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+:host .tlpp-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-family: inherit !important;
+  font-size: 14px !important;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:host .tlpp-btn-primary {
+  background: var(--tlpp-accent) !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+:host .tlpp-btn-primary:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+:host .tlpp-hint {
+  font-size: 11px;
+  color: var(--tlpp-muted) !important;
+}
+
+:host .tlpp-result {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--tlpp-border);
+}
+
+:host .tlpp-meter-wrap {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+:host .tlpp-meter {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+:host .tlpp-dial {
+  width: 120px;
+  height: 120px;
+}
+
+:host .tlpp-dial-bg {
+  stroke: var(--tlpp-border);
+}
+
+:host .tlpp-dial-fg {
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+}
+
+:host .tlpp-dial-fg.tlpp-stroke-low {
+  stroke: var(--tlpp-low);
+}
+
+:host .tlpp-dial-fg.tlpp-stroke-med {
+  stroke: var(--tlpp-med);
+}
+
+:host .tlpp-dial-fg.tlpp-stroke-high {
+  stroke: var(--tlpp-high);
+}
+
+:host .tlpp-pct {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--tlpp-text) !important;
+}
+
+:host .tlpp-riskline {
+  flex: 1;
+  min-width: 0;
+}
+
+:host .tlpp-risk-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+:host .tlpp-risk-badge.tlpp-lvl-low {
+  background: #dcfce7;
+  color: #166534 !important;
+}
+
+:host .tlpp-risk-badge.tlpp-lvl-med {
+  background: #ffedd5;
+  color: #9a3412 !important;
+}
+
+:host .tlpp-risk-badge.tlpp-lvl-high {
+  background: #fee2e2;
+  color: #991b1b !important;
+}
+
+:host .tlpp-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tlpp-text) !important;
+}
+
+:host .tlpp-section {
+  margin-top: 16px;
+}
+
+:host .tlpp-h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tlpp-muted) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+:host .tlpp-list,
+:host .tlpp-url-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--tlpp-text) !important;
+}
+
+:host .tlpp-list li,
+:host .tlpp-url-list li {
+  margin-bottom: 6px;
+}
+
+:host .tlpp-url-list code {
+  font-size: 11px;
+  word-break: break-all;
+  background: #e2e8f0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #0f172a !important;
+}
+
+:host .tlpp-url-reason {
+  display: block;
+  margin-top: 4px;
+  color: var(--tlpp-muted) !important;
+  font-size: 12px;
+}
+
+:host .tlpp-note {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--tlpp-muted) !important;
+}
+
+:host .tlpp-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #991b1b !important;
+  font-size: 13px;
+}

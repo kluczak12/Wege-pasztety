@@ -74,3 +74,28 @@ class BatchAnalysisResult(BaseModel):
     analyzed_count: int
     dangerous_count: int
     suspicious_count: int
+
+
+class PhishingAnalysisRequest(BaseModel):
+    """Treść wiadomości do analizy antyphishing (osobna od skanowania linków)."""
+    text: str
+    page_url: Optional[str] = None
+
+
+class PhishingSignal(BaseModel):
+    category: str
+    detail: str
+
+
+class PhishingUrlFlag(BaseModel):
+    url: str
+    reason_pl: str
+
+
+class PhishingAnalysisResult(BaseModel):
+    threat_score_percent: int
+    risk_level: str
+    summary_pl: str
+    signals: List[PhishingSignal]
+    urls_flagged: List[PhishingUrlFlag]
+    engine_note: Optional[str] = None

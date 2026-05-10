@@ -7,8 +7,11 @@ from app.models.schemas import (
     BatchAnalysisResult,
     LinkAnalysisRequest,
     LinkAnalysisResult,
+    PhishingAnalysisRequest,
+    PhishingAnalysisResult,
 )
 from app.services.analyzer import analyze_link, sandbox_simulation_for_url
+from app.services.phishing_analyzer import analyze_phishing_message
 
 router = APIRouter()
 
@@ -54,6 +57,15 @@ async def analyze_links(request: BatchAnalysisRequest):
 @router.post("/analyze/single", response_model=LinkAnalysisResult)
 async def analyze_single_link(request: LinkAnalysisRequest):
     return await analyze_link(request)
+
+
+@router.post("/analyze/phishing-text", response_model=PhishingAnalysisResult)
+async def analyze_phishing_text(request: PhishingAnalysisRequest):
+    """Ocena treści wiadomości (Groq): phishing, presja, płatności, podejrzane linki."""
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Brak treści wiadomości (pole text)")
+    return await analyze_phishing_message(text)
 
 
 @router.get("/sandbox/video")
