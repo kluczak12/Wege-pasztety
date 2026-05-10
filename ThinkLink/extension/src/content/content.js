@@ -108,7 +108,6 @@
     country_label: "Kraj",
     section_redirects: "Łańcuch przekierowań",
     hops_suffix: "skoków",
-    threat_type_label: "Typ zagrożenia",
     badge_error_title: "Analiza nie powiodła się — upewnij się, że backend ThinkLink działa.",
   };
 
@@ -849,10 +848,8 @@
       sandboxData?.verdict && Array.isArray(sandboxData.events_detected)
     );
     const hasSandboxSummaryOnly = Boolean(sandboxData?.verdict) && !hasFullSandboxTimeline;
-    const hasThreatType = Boolean(aiData.threat_type);
     const showAiSection =
       hasAiExplanation ||
-      hasThreatType ||
       hasFullSandboxTimeline ||
       hasSandboxSummaryOnly ||
       ((rl === "dangerous" || rl === "suspicious") && !sandboxData?.verdict);
@@ -863,13 +860,8 @@
             ${hasAiExplanation ? `<p class="tl-ai-text">${escapeHtml(exp)}</p>` : ""}
             ${
               !hasAiExplanation &&
-              (hasThreatType || hasSandboxSummaryOnly || hasFullSandboxTimeline)
+              (hasSandboxSummaryOnly || hasFullSandboxTimeline)
                 ? `<p class="tl-ai-text tl-ai-muted">${escapeHtml(t("report_ai_no_model"))}</p>`
-                : ""
-            }
-            ${
-              hasThreatType
-                ? `<span class="tl-threat-type">${escapeHtml(t("threat_type_label"))}: <strong>${escapeHtml(aiData.threat_type)}</strong></span>`
                 : ""
             }
             ${hasFullSandboxTimeline ? sandboxFullTimelineHtml(sandboxData, result) : ""}

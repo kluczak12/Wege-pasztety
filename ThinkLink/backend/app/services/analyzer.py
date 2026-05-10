@@ -448,7 +448,6 @@ def _base_scan_verdict(evidence: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "risk_level": level,
         "risk_score": score,
-        "threat_type": "unknown",
         "explanation": explanation,
         "threats": [],
     }
@@ -479,7 +478,6 @@ async def analyze_link(request: LinkAnalysisRequest) -> LinkAnalysisResult:
             ai_assessment=json.dumps({
                 "risk_level": "suspicious",
                 "risk_score": 0.3,
-                "threat_type": "unknown",
                 "explanation": f"Błąd analizatora: {type(e).__name__}: {e}",
                 "threats": [],
             }, ensure_ascii=False),
@@ -544,6 +542,18 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
         original_url=url,
         redirect_chain=redirect_chain,
     )
+
+    # Downgrade triggers dangerous via _has_hard_red_flags_evidence, but the HTTPS_DOWNGRADE
+    # indicator was only appended in _heuristic_refine_unknown (UNKNOWN branch) — add it here
+    # so the report lists the same signal the verdict already uses.
+    if redirect_signals["downgrade"]:
+        indicators.append(
+            ThreatIndicator(
+                code="HTTPS_DOWNGRADE",
+                description="Łańcuch przekierowań obniża protokół z HTTPS do HTTP.",
+                severity="high",
+            )
+        )
 
     evidence = {
         "url": url,
@@ -1013,7 +1023,7 @@ def _sandbox_evidence_pack(analysis: LinkAnalysisResult) -> Dict[str, Any]:
             if isinstance(parsed, dict):
                 ai_brief = {
                     k: parsed[k]
-                    for k in ("risk_level", "risk_score", "threat_type", "explanation", "threats")
+                    for k in ("risk_level", "risk_score", "explanation", "threats")
                     if k in parsed
                 }
         except json.JSONDecodeError:
