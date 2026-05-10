@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from enum import Enum
 
@@ -74,3 +74,14 @@ class BatchAnalysisResult(BaseModel):
     analyzed_count: int
     dangerous_count: int
     suspicious_count: int
+
+
+class TextPhishingRequest(BaseModel):
+    text: str = Field(..., max_length=12000)
+
+
+class TextPhishingAnalysisResponse(BaseModel):
+    risk_level: str
+    risk_score: float
+    is_phishing_likely: bool
+    summary_pl: str

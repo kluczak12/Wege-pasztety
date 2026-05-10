@@ -111,6 +111,16 @@
     hops_suffix: "skoków",
     badge_error_title: "Analiza nie powiodła się — upewnij się, że backend ThinkLink działa.",
     trust_url_btn: "Zaufaj temu adresowi (whitelist)",
+    text_panel_tab: "Sprawdź tekst pod kątem phishingu",
+    text_panel_tab_short: "Tekst",
+    text_panel_title: "Analiza tekstu",
+    text_panel_lead:
+      "Wklej SMS, fragment maila lub wiadomość z komunikatora. Ocena jest wykonywana przez model Groq w backendzie ThinkLink.",
+    text_panel_placeholder: "Wklej treść wiadomości do sprawdzenia…",
+    text_panel_submit: "Analizuj (Groq)",
+    text_panel_loading: "Analizuję tekst…",
+    text_panel_empty: "Wklej najpierw tekst wiadomości.",
+    text_panel_api_err: "Nie udało się połączyć z backendem ThinkLink (localhost:8000).",
   };
 
   function t(key) {
@@ -1070,6 +1080,145 @@
     document.querySelectorAll(".tl-modal-overlay").forEach(m => m.remove());
   }
 
+  function renderTextPhishingResultHtml(data) {
+    const lvl = String(data.risk_level || "unknown").toLowerCase();
+    const rc = riskLevelClass(lvl);
+    const pct = Math.round(Number(data.risk_score || 0) * 100);
+    const badge = riskLevelLabelPl(lvl);
+    return `
+      <div class="tl-side-result-card tl-risk-${rc}">
+        <div class="tl-side-result-head">
+          <span class="tl-side-result-badge">${escapeHtml(badge)}</span>
+          <span class="tl-side-result-pct">${pct}%</span>
+        </div>
+        <p class="tl-side-summary">${escapeHtml(data.summary_pl || "")}</p>
+      </div>
+    `;
+  }
+
+  function initTextPhishingInspector() {
+    if (!isExtensionContextValid()) return;
+    /* Tylko główne okno — inaczej panel pojawiałby się w iframe (reklamy, filmiki). */
+    if (window.self !== window.top) return;
+    if (document.getElementById("thinklink-text-inspector")) return;
+
+    const root = document.createElement("div");
+    root.id = "thinklink-text-inspector";
+    root.className = "tl-side-root";
+    root.setAttribute("aria-hidden", "true");
+
+    const drawer = document.createElement("aside");
+    drawer.id = "thinklink-text-drawer";
+    drawer.className = "tl-side-drawer";
+    drawer.setAttribute("role", "region");
+    drawer.setAttribute("aria-label", t("text_panel_title"));
+
+    const inner = document.createElement("div");
+    inner.className = "tl-side-inner";
+
+    const lead = document.createElement("p");
+    lead.className = "tl-side-lead";
+    lead.textContent = t("text_panel_lead");
+
+    const ta = document.createElement("textarea");
+    ta.className = "tl-side-textarea";
+    ta.rows = 10;
+    ta.maxLength = 12000;
+    ta.placeholder = t("text_panel_placeholder");
+    ta.setAttribute("aria-label", t("text_panel_placeholder"));
+
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.className = "tl-side-submit";
+    submitBtn.textContent = t("text_panel_submit");
+
+    const resultEl = document.createElement("div");
+    resultEl.className = "tl-side-result";
+    resultEl.setAttribute("aria-live", "polite");
+
+    inner.appendChild(lead);
+    inner.appendChild(ta);
+    inner.appendChild(submitBtn);
+    inner.appendChild(resultEl);
+    drawer.appendChild(inner);
+
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "tl-side-handle";
+    handle.setAttribute("aria-expanded", "false");
+    handle.setAttribute("aria-controls", "thinklink-text-drawer");
+    handle.title = t("text_panel_tab");
+
+    const handleIcon = document.createElement("span");
+    handleIcon.className = "tl-side-handle-icon";
+    handleIcon.setAttribute("aria-hidden", "true");
+    handleIcon.textContent = "🛡️";
+
+    const handleLabel = document.createElement("span");
+    handleLabel.className = "tl-side-handle-label";
+    handleLabel.textContent = t("text_panel_tab_short");
+
+    handle.appendChild(handleIcon);
+    handle.appendChild(handleLabel);
+
+    root.appendChild(drawer);
+    root.appendChild(handle);
+
+    function setOpen(open) {
+      root.classList.toggle("tl-side-open", open);
+      root.setAttribute("aria-hidden", open ? "false" : "true");
+      handle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        setTimeout(() => {
+          try {
+            ta.focus();
+          } catch {
+            /* ignore */
+          }
+        }, 40);
+      }
+    }
+
+    handle.addEventListener("click", () => setOpen(!root.classList.contains("tl-side-open")));
+
+    submitBtn.addEventListener("click", () => {
+      void (async () => {
+        const raw = (ta.value || "").trim();
+        if (!raw) {
+          resultEl.innerHTML = `<p class="tl-side-msg tl-side-msg-warn">${escapeHtml(t("text_panel_empty"))}</p>`;
+          return;
+        }
+        submitBtn.disabled = true;
+        resultEl.innerHTML = `<p class="tl-side-msg">${escapeHtml(t("text_panel_loading"))}</p>`;
+        try {
+          const apiResult = await sendThinkLinkApi({
+            type: "THINKLINK_API",
+            method: "POST",
+            url: `${API_BASE}/analyze/text-phishing`,
+            body: { text: raw },
+            timeoutMs: 95000,
+          });
+          if (!apiResult.ok) {
+            throw new Error(apiResult.error || `HTTP ${apiResult.status || ""}`);
+          }
+          resultEl.innerHTML = renderTextPhishingResultHtml(apiResult.data || {});
+        } catch (e) {
+          resultEl.innerHTML = `<p class="tl-side-msg tl-side-msg-err">${escapeHtml(t("text_panel_api_err"))}<br><small>${escapeHtml(e?.message || String(e))}</small></p>`;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      })();
+    });
+
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && root.classList.contains("tl-side-open")) {
+        setOpen(false);
+      }
+    });
+
+    (document.documentElement || document.body).appendChild(root);
+  }
+
 
   async function syncMode() {
     const settings = await loadSettings();
@@ -1167,10 +1316,15 @@
   }
 
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startScanning);
-  } else {
+  function bootstrapThinkLinkUi() {
     startScanning();
+    initTextPhishingInspector();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrapThinkLinkUi);
+  } else {
+    bootstrapThinkLinkUi();
   }
 
 })();

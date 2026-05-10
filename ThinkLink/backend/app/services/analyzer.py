@@ -1396,3 +1396,195 @@ def _make_unknown_result(url: str, reason: str) -> LinkAnalysisResult:
         is_safe=False,
         indicators=[ThreatIndicator(code="PARSE_ERROR", description=reason, severity="low")],
     )
+
+
+TEXT_PHISHING_MAX_CHARS = 12000
+TEXT_PHISHING_AI_TIMEOUT = max(
+    15,
+    int(os.environ.get("TEXT_PHISHING_AI_TIMEOUT_SECONDS", "").strip() or "55"),
+)
+
+_URL_IN_TEXT_RE = re.compile(
+    r"(?i)\b(https?://[^\s<>'\"\]\)]+|www\.[^\s<>'\"\]\)]+)",
+)
+
+_TEXT_PHISHING_SYSTEM = """Jesteś ekspertem od phishingu i oszustw internetowych (SMS, e-mail, komunikatory), specjalizujesz się w języku polskim.
+
+ZADANIE: na podstawie treści wiadomości OCEŃ, czy może to być phishing / scam / wyłudzenie danych lub pieniędzy.
+
+UZGODNIJ OCENĘ WYŁĄCZNIE NA PODSTAWIE TREŚCI I KONTEKSTU (nie używaj zewnętrznych list słów po stronie serwera — tutaj oceniasz Ty).
+Uwzględnij m.in.:
+- presję czasu („natychmiast”, „ostatnie godziny”, groźby utraty konta lub danych),
+- fałszywe alarmy bezpieczeństwa, podszywanie pod firmy / dostawców / urzędy,
+- prośby o logowanie, potwierdzenie tożsamości, płatność, przelew, „odnowienie subskrypcji”,
+- nietypowe lub podejrzane linki (jeśli są podane w polu pomocniczym — potraktuj je jako część wiadomości).
+
+SKALA:
+- dangerous — wyraźny lub bardzo prawdopodobny phishing/scam.
+- suspicious — istotne sygnały ostrzegawcze, warto zweryfikować źródło.
+- safe — brak sensownych sygnałów wyłudzenia (nie gwarantuje to autentyczności nadawcy).
+
+Zwróć WYŁĄCZNIE jeden obiekt JSON (bez markdown), pola:
+{
+  "risk_level": "safe" | "suspicious" | "dangerous",
+  "risk_score": 0.0,
+  "is_phishing_likely": false,
+  "summary_pl": "maksymalnie 2–3 krótkie zdania po polsku z uzasadnieniem werdyktu"
+}
+risk_score: liczba od 0.0 do 1.0 (wyżej = gorzej). is_phishing_likely: true gdy realne ryzyko wyłudzenia."""
+
+
+def _extract_urls_from_free_text(text: str) -> List[str]:
+    raw = text or ""
+    seen: set[str] = set()
+    out: List[str] = []
+    for m in _URL_IN_TEXT_RE.finditer(raw):
+        u = m.group(1).strip().rstrip(").,;]")
+        if len(u) < 8:
+            continue
+        if len(u) > 2048:
+            u = u[:2048]
+        if u.lower().startswith("www."):
+            u = "https://" + u
+        key = u.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(u)
+    return out
+
+
+def _parse_text_phishing_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if m:
+        cleaned = m.group(0)
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _normalize_groq_text_phishing(raw: Dict[str, Any]) -> Dict[str, Any]:
+    score = _coerce_score(raw.get("risk_score"))
+    level = _coerce_level(raw.get("risk_level"))
+    if level == RiskLevel.UNKNOWN:
+        level = _level_from_score(score)
+
+    if level == RiskLevel.DANGEROUS:
+        score = max(score, 0.65)
+    elif level == RiskLevel.SUSPICIOUS:
+        score = max(score, 0.28)
+    elif level == RiskLevel.SAFE:
+        score = min(score, 0.92)
+
+    summary = str(raw.get("summary_pl") or "").strip()
+    if len(summary) > 900:
+        summary = summary[:897] + "…"
+    if not summary:
+        summary = "Brak krótkiego uzasadnienia z modelu — potraktuj wynik ostrożnie."
+
+    is_phish = bool(raw.get("is_phishing_likely"))
+    if level in (RiskLevel.DANGEROUS, RiskLevel.SUSPICIOUS):
+        is_phish = True
+    elif score >= 0.45:
+        is_phish = True
+
+    return {
+        "risk_level": level.value,
+        "risk_score": round(min(1.0, max(0.0, score)), 3),
+        "is_phishing_likely": is_phish,
+        "summary_pl": summary,
+    }
+
+
+async def analyze_text_phishing(text: str) -> Dict[str, Any]:
+    raw_in = (text or "").strip()
+    if not raw_in:
+        raise ValueError("pusty tekst")
+
+    truncated = raw_in[:TEXT_PHISHING_MAX_CHARS]
+    urls = _extract_urls_from_free_text(truncated)
+
+    try:
+        _get_client()
+    except RuntimeError:
+        return {
+            "risk_level": RiskLevel.UNKNOWN.value,
+            "risk_score": 0.0,
+            "is_phishing_likely": False,
+            "summary_pl": (
+                "Brak klucza GROQ_API_KEY w pliku backend/.env — ta analiza działa wyłącznie przez "
+                "model Groq. Dodaj klucz z console.groq.com i uruchom ponownie backend."
+            ),
+        }
+
+    user_msg = json.dumps(
+        {
+            "wiadomosc": truncated,
+            "wykryte_adresy_url": urls,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    semaphore = _get_semaphore()
+
+    async def _call() -> Dict[str, Any]:
+        async with semaphore:
+            loop = asyncio.get_event_loop()
+            model = _fast_model()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: _get_client().chat.completions.create(
+                        model=model,
+                        max_tokens=450,
+                        temperature=0.12,
+                        response_format={"type": "json_object"},
+                        messages=[
+                            {"role": "system", "content": _TEXT_PHISHING_SYSTEM},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    ),
+                ),
+                timeout=float(TEXT_PHISHING_AI_TIMEOUT),
+            )
+        t = (response.choices[0].message.content or "").strip()
+        return _parse_text_phishing_json(t)
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(2):
+        try:
+            groq_raw = await _call()
+            if not groq_raw:
+                raise ValueError("empty model response")
+            return _normalize_groq_text_phishing(groq_raw)
+        except asyncio.TimeoutError:
+            last_exc = asyncio.TimeoutError()
+            if attempt == 0:
+                await asyncio.sleep(0.6)
+                continue
+        except Exception as e:
+            last_exc = e
+            break
+
+    err_hint = ""
+    if last_exc:
+        err_hint = f" ({type(last_exc).__name__})"
+    return {
+        "risk_level": RiskLevel.UNKNOWN.value,
+        "risk_score": 0.0,
+        "is_phishing_likely": False,
+        "summary_pl": (
+            "Nie udało się uzyskać oceny z modelu Groq (timeout lub błąd)."
+            + err_hint
+            + " Spróbuj ponownie za chwilę."
+        ),
+    }
