@@ -1,5 +1,8 @@
 {
   "extName": {
-    "message": "ThinkLink – Link Protector"
+    "message": "ThinkLink — link protection"
+  },
+  "extDescription": {
+    "message": "Real-time link security analysis powered by AI."
   }
 }

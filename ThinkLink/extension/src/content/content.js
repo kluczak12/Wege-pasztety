@@ -13,7 +13,6 @@
 
 
   let currentMode = "simple";
-  let pageLanguage = document.documentElement.lang || navigator.language || "en";
   let scanTimer = null;
   let resultCache = new Map();
   let scanChain = Promise.resolve();
@@ -64,91 +63,79 @@
   function shutdownDueToInvalidContext() {
     if (!extensionAlive) return;
     extensionAlive = false;
-    console.warn("[ThinkLink] Extension was reloaded — content script shutting down. Refresh the page to re-enable.");
+    console.warn("[ThinkLink] Rozszerzenie zostało przeładowane — skrypt treści wyłączony. Odśwież stronę, aby włączyć ponownie.");
     if (scanIntervalHandle) clearInterval(scanIntervalHandle);
     if (scanTimer) clearTimeout(scanTimer);
     if (mutationObserver) mutationObserver.disconnect();
   }
 
 
-  const TRANSLATIONS = {
-    en: {
-      safe: "Safe",
-      dangerous: "Dangerous — blocked",
-      suspicious: "Suspicious",
-      unknown: "Unknown",
-      unknown_tooltip:
-        "Still unclassified — ThinkLink will retry automatically. If this stays, the URL could not be checked (e.g. invalid or non-web link).",
-      blocked_tooltip: "This link was blocked by ThinkLink because it was flagged as dangerous.",
-      report_btn: "Show Report",
-      loading: "Checking…",
-      aria_safe: "Safe link",
-      aria_danger: "Dangerous link — click blocked",
-      aria_suspicious: "Suspicious link — proceed with caution",
-      report_sandbox_disclaimer:
-        "Timeline is inferred from the same scan data as this report, not from a real browser recording.",
-      report_sandbox_unavailable: "Sandbox details unavailable.",
-      report_ai_no_model:
-        "No base-scan text was stored — the sandbox summary follows in this section.",
-      report_assessment_title: "Scan & sandbox",
-      report_sandbox_short_title: "Sandbox summary",
-      report_sandbox_timeline_title: "Sandbox timeline",
-      sandbox_simulating: "Simulating visit to:",
-      sandbox_detected_events: "Detected Events",
-    },
-    pl: {
-      safe: "Bezpieczne",
-      dangerous: "Niebezpieczne — zablokowane",
-      suspicious: "Podejrzane",
-      unknown: "Nieznane",
-      unknown_tooltip:
-        "Bez klasyfikacji — ThinkLink ponowi próbę. Jeśli nadal widać ten znaczek, linku nie dało się sprawdzić.",
-      blocked_tooltip: "Ten link został zablokowany przez ThinkLink, ponieważ został oznaczony jako niebezpieczny.",
-      report_btn: "Pokaż raport",
-      loading: "Sprawdzam…",
-      aria_safe: "Bezpieczny link",
-      aria_danger: "Niebezpieczny link — kliknięcie zablokowane",
-      aria_suspicious: "Podejrzany link — zachowaj ostrożność",
-      report_sandbox_disclaimer:
-        "Oś czasu jest wnioskowana z tych samych danych skanowania co ten raport, a nie z nagrania przeglądarki.",
-      report_sandbox_unavailable: "Szczegóły sandbox niedostępne.",
-      report_ai_no_model:
-        "Brak zapisanego opisu skanu — skrót sandbox jest niżej w tej sekcji.",
-      report_assessment_title: "Skan i sandbox",
-      report_sandbox_short_title: "Skrót sandbox",
-      report_sandbox_timeline_title: "Oś czasu sandbox",
-      sandbox_simulating: "Symulacja wizyty pod adresem:",
-      sandbox_detected_events: "Wykryte zdarzenia",
-    },
-    de: {
-      safe: "Sicher",
-      dangerous: "Gefährlich — gesperrt",
-      suspicious: "Verdächtig",
-      unknown: "Unbekannt",
-      unknown_tooltip:
-        "Noch nicht eingestuft — ThinkLink versucht es erneut. Bleibt das, ließ sich die URL nicht prüfen.",
-      blocked_tooltip: "Dieser Link wurde von ThinkLink blockiert, da er als gefährlich eingestuft wurde.",
-      report_btn: "Bericht anzeigen",
-      loading: "Prüfe…",
-      aria_safe: "Sicherer Link",
-      aria_danger: "Gefährlicher Link — Klick blockiert",
-      aria_suspicious: "Verdächtiger Link — Vorsicht geboten",
-      report_sandbox_disclaimer:
-        "Die Zeitleiste leitet sich von denselben Scan-Daten wie dieser Bericht ab, nicht von einer echten Browseraufzeichnung.",
-      report_sandbox_unavailable: "Sandbox-Details nicht verfügbar.",
-      report_ai_no_model:
-        "Kein gespeicherter Scan-Text — die Sandbox-Kurzfassung steht weiter unten in diesem Abschnitt.",
-      report_assessment_title: "Scan & Sandbox",
-      report_sandbox_short_title: "Sandbox-Kurzfassung",
-      report_sandbox_timeline_title: "Sandbox-Zeitleiste",
-      sandbox_simulating: "Simulierter Besuch unter:",
-      sandbox_detected_events: "Erkannte Ereignisse",
-    }
+  const UI = {
+    safe: "Bezpieczne",
+    dangerous: "Niebezpieczne — zablokowane",
+    suspicious: "Podejrzane",
+    unknown: "Nieznane",
+    unknown_tooltip:
+      "Bez klasyfikacji — ThinkLink ponowi próbę. Jeśli nadal widać ten znaczek, linku nie dało się sprawdzić.",
+    blocked_tooltip: "Ten link został zablokowany przez ThinkLink, ponieważ został oznaczony jako niebezpieczny.",
+    report_btn: "Pokaż raport",
+    loading: "Sprawdzam…",
+    aria_safe: "Bezpieczny link",
+    aria_danger: "Niebezpieczny link — kliknięcie zablokowane",
+    aria_suspicious: "Podejrzany link — zachowaj ostrożność",
+    report_sandbox_disclaimer:
+      "Oś czasu jest wnioskowana z tych samych danych skanowania co ten raport, a nie z nagrania przeglądarki.",
+    report_sandbox_unavailable: "Szczegóły sandbox niedostępne.",
+    report_ai_no_model:
+      "Brak zapisanego opisu skanu — skrót sandbox jest niżej w tej sekcji.",
+    report_assessment_title: "Skan i sandbox",
+    report_sandbox_short_title: "Skrót sandbox",
+    report_sandbox_timeline_title: "Oś czasu sandbox",
+    sandbox_simulating: "Symulacja wizyty pod adresem:",
+    sandbox_detected_events: "Wykryte zdarzenia",
+    modal_title: "Raport zagrożenia ThinkLink",
+    modal_close: "Zamknij",
+    modal_aria_report: "Raport zagrożenia ThinkLink",
+    risk_score_label: "Ocena ryzyka",
+    section_url: "Adres URL",
+    section_indicators: "Wskaźniki zagrożenia",
+    no_indicators: "Nie wykryto szczegółowych wskaźników.",
+    section_domain: "Informacje o domenie",
+    domain_label: "Domena",
+    age_label: "Wiek",
+    age_days: "dni",
+    registrar_label: "Rejestrator",
+    country_label: "Kraj",
+    section_redirects: "Łańcuch przekierowań",
+    hops_suffix: "skoków",
+    threat_type_label: "Typ zagrożenia",
+    badge_error_title: "Analiza nie powiodła się — upewnij się, że backend ThinkLink działa.",
   };
 
   function t(key) {
-    const lang = pageLanguage.slice(0, 2).toLowerCase();
-    return (TRANSLATIONS[lang] || TRANSLATIONS["en"])[key] || TRANSLATIONS["en"][key] || key;
+    return UI[key] ?? key;
+  }
+
+  function riskLevelLabelPl(level) {
+    const m = {
+      safe: "BEZPIECZNE",
+      suspicious: "PODEJRZANE",
+      dangerous: "NIEBEZPIECZNE",
+      unknown: "NIEZNANE",
+    };
+    const k = String(level || "").toLowerCase();
+    return m[k] ?? String(level || "").toUpperCase();
+  }
+
+  function severityPl(sev) {
+    const m = {
+      low: "niski",
+      medium: "średni",
+      high: "wysoki",
+      critical: "krytyczny",
+    };
+    const k = String(sev || "").toLowerCase();
+    return m[k] ?? String(sev ?? "");
   }
 
   function escapeHtml(str) {
@@ -609,7 +596,7 @@
           element_type: el.tagName.toLowerCase()
         };
       }),
-      page_language: pageLanguage
+      page_language: "pl"
     };
 
     try {
@@ -650,7 +637,7 @@
       });
 
     } catch (err) {
-      console.error("[ThinkLink] Analysis failed:", err);
+      console.error("[ThinkLink] Błąd analizy:", err);
       toAnalyze.forEach(el => {
         delete el.dataset.thinklinkPending;
         injectBadge(el, "error", null);
@@ -720,7 +707,7 @@
       }
     } else if (status === "error") {
       badge.innerHTML = `<span class="tl-icon tl-error" aria-label="${t("unknown")}">!</span>`;
-      badge.setAttribute("title", "Analysis failed — check that the ThinkLink backend is running.");
+      badge.setAttribute("title", t("badge_error_title"));
     } else {
       badge.innerHTML = `<span class="tl-icon tl-unknown" aria-label="${t("unknown")}">?</span>`;
       badge.setAttribute("title", t("unknown_tooltip"));
@@ -783,7 +770,7 @@
           <p>${t("blocked_tooltip")}</p>
           <code>${result.url.slice(0, 80)}${result.url.length > 80 ? "…" : ""}</code>
         </div>
-        <button class="tl-notice-close" aria-label="Close" type="button">✕</button>
+        <button class="tl-notice-close" aria-label="${escapeHtml(t("modal_close"))}" type="button">✕</button>
       </div>
     `;
     notice.querySelector(".tl-notice-close").addEventListener("click", () => notice.remove());
@@ -831,25 +818,25 @@
           ${ind.code}
         </span>
         <span class="tl-indicator-desc">${ind.description}</span>
-        <span class="tl-indicator-sev tl-sev-${ind.severity}">${ind.severity}</span>
+        <span class="tl-indicator-sev tl-sev-${ind.severity}">${escapeHtml(severityPl(ind.severity))}</span>
       </li>
-    `).join("") || "<li>No specific indicators detected.</li>";
+    `).join("") || `<li>${escapeHtml(t("no_indicators"))}</li>`;
 
     const domainHtml = result.domain_info ? `
       <div class="tl-section">
-        <h3>Domain Info</h3>
+        <h3>${escapeHtml(t("section_domain"))}</h3>
         <ul>
-          <li>Domain: <strong>${result.domain_info.domain}</strong></li>
-          ${result.domain_info.age_days != null ? `<li>Age: <strong>${result.domain_info.age_days} days</strong></li>` : ""}
-          ${result.domain_info.registrar ? `<li>Registrar: ${result.domain_info.registrar}</li>` : ""}
-          ${result.domain_info.country ? `<li>Country: ${result.domain_info.country}</li>` : ""}
+          <li>${escapeHtml(t("domain_label"))}: <strong>${result.domain_info.domain}</strong></li>
+          ${result.domain_info.age_days != null ? `<li>${escapeHtml(t("age_label"))}: <strong>${result.domain_info.age_days} ${t("age_days")}</strong></li>` : ""}
+          ${result.domain_info.registrar ? `<li>${escapeHtml(t("registrar_label"))}: ${result.domain_info.registrar}</li>` : ""}
+          ${result.domain_info.country ? `<li>${escapeHtml(t("country_label"))}: ${result.domain_info.country}</li>` : ""}
         </ul>
       </div>
     ` : "";
 
     const redirectHtml = result.redirect_chain && result.redirect_chain.redirect_count > 0 ? `
       <div class="tl-section">
-        <h3>Redirect Chain (${result.redirect_chain.redirect_count} hops)</h3>
+        <h3>${escapeHtml(t("section_redirects"))} (${result.redirect_chain.redirect_count} ${t("hops_suffix")})</h3>
         <ol class="tl-redirect-chain">
           ${result.redirect_chain.hops.map(h => `<li><code>${h.slice(0, 60)}${h.length > 60 ? "…" : ""}</code></li>`).join("")}
         </ol>
@@ -882,7 +869,7 @@
             }
             ${
               hasThreatType
-                ? `<span class="tl-threat-type">Threat type: <strong>${escapeHtml(aiData.threat_type)}</strong></span>`
+                ? `<span class="tl-threat-type">${escapeHtml(t("threat_type_label"))}: <strong>${escapeHtml(aiData.threat_type)}</strong></span>`
                 : ""
             }
             ${hasFullSandboxTimeline ? sandboxFullTimelineHtml(sandboxData, result) : ""}
@@ -900,24 +887,24 @@
     modal.className = "tl-modal-overlay";
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
-    modal.setAttribute("aria-label", "ThinkLink Threat Report");
+    modal.setAttribute("aria-label", t("modal_aria_report"));
     modal.innerHTML = `
       <div class="tl-modal">
         <div class="tl-modal-header">
-          <h2>🛡️ ThinkLink Threat Report</h2>
-          <button class="tl-modal-close" aria-label="Close" type="button">✕</button>
+          <h2>🛡️ ${escapeHtml(t("modal_title"))}</h2>
+          <button class="tl-modal-close" aria-label="${escapeHtml(t("modal_close"))}" type="button">✕</button>
         </div>
         <div class="tl-modal-body">
           <div class="tl-risk-summary tl-risk-${result.risk_level}">
-            <span class="tl-risk-label">${result.risk_level.toUpperCase()}</span>
-            <span class="tl-risk-score">Risk score: ${Math.round(result.risk_score * 100)}%</span>
+            <span class="tl-risk-label">${escapeHtml(riskLevelLabelPl(result.risk_level))}</span>
+            <span class="tl-risk-score">${escapeHtml(t("risk_score_label"))}: ${Math.round(result.risk_score * 100)}%</span>
           </div>
           <div class="tl-section">
-            <h3>URL</h3>
+            <h3>${escapeHtml(t("section_url"))}</h3>
             <code class="tl-url-display">${result.url}</code>
           </div>
           <div class="tl-section">
-            <h3>Threat Indicators</h3>
+            <h3>${escapeHtml(t("section_indicators"))}</h3>
             <ul class="tl-indicators-list">${indicatorsHtml}</ul>
           </div>
           ${domainHtml}
@@ -959,7 +946,7 @@
           await analyzeLinks(elements);
         }
       })
-      .catch(err => console.error("[ThinkLink] Scan error:", err));
+      .catch(err => console.error("[ThinkLink] Błąd skanowania:", err));
     return scanChain;
   }
 

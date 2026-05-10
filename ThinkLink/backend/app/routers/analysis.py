@@ -16,10 +16,10 @@ router = APIRouter()
 @router.post("/analyze", response_model=BatchAnalysisResult)
 async def analyze_links(request: BatchAnalysisRequest):
     if not request.links:
-        raise HTTPException(status_code=400, detail="No links provided")
+        raise HTTPException(status_code=400, detail="Nie przekazano żadnych linków")
 
     if len(request.links) > 50:
-        raise HTTPException(status_code=400, detail="Max 50 links per batch")
+        raise HTTPException(status_code=400, detail="Maksymalnie 50 linków na żądanie")
 
     tasks = [analyze_link(link) for link in request.links]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -34,7 +34,7 @@ async def analyze_links(request: BatchAnalysisRequest):
                     risk_score=0.0,
                     is_safe=False,
                     indicators=[],
-                    ai_assessment=f"Analysis error: {str(result)}",
+                    ai_assessment=f"Błąd analizy: {str(result)}",
                 )
             )
         else:
@@ -57,7 +57,7 @@ async def analyze_single_link(request: LinkAnalysisRequest):
 
 
 @router.get("/sandbox/video")
-async def get_sandbox_video(url: str = Query(..., description="URL to simulate")):
+async def get_sandbox_video(url: str = Query(..., description="URL do symulacji")):
     try:
         payload = await sandbox_simulation_for_url(url)
         return JSONResponse(payload)

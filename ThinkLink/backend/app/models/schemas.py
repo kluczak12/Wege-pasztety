@@ -19,7 +19,7 @@ class LinkAnalysisRequest(BaseModel):
 
 class BatchAnalysisRequest(BaseModel):
     links: List[LinkAnalysisRequest]
-    page_language: Optional[str] = "en"
+    page_language: Optional[str] = "pl"
 
 
 class RedirectChain(BaseModel):

@@ -1,66 +1,28 @@
-const TRANSLATIONS = {
-  en: {
-    mode_simple: "Simple",
-    mode_simple_desc: "Block & show icons",
-    mode_expert: "Expert",
-    mode_expert_desc: "Reports & sandbox",
-    stats_title: "Protection Stats",
-    stat_blocked: "Total blocked",
-    stat_session: "This session",
-    history_title: "Recent Threats",
-    history_empty: "No threats blocked yet. 🎉",
-    clear_btn: "Clear",
-    footer_text: "AI-powered protection",
-    reset_btn: "Reset counter",
-    risk_dangerous: "Dangerous",
-    risk_suspicious: "Suspicious",
-  },
-  pl: {
-    mode_simple: "Prosty",
-    mode_simple_desc: "Blokuj i pokazuj ikony",
-    mode_expert: "Ekspert",
-    mode_expert_desc: "Raporty i sandbox",
-    stats_title: "Statystyki ochrony",
-    stat_blocked: "Łącznie zablokowano",
-    stat_session: "Ta sesja",
-    history_title: "Ostatnie zagrożenia",
-    history_empty: "Brak zablokowanych zagrożeń. 🎉",
-    clear_btn: "Wyczyść",
-    footer_text: "Ochrona wspierana przez AI",
-    reset_btn: "Zeruj licznik",
-    risk_dangerous: "Niebezpieczne",
-    risk_suspicious: "Podejrzane",
-  }
+const UI = {
+  mode_simple: "Prosty",
+  mode_simple_desc: "Blokuj i pokazuj ikony",
+  mode_expert: "Ekspert",
+  mode_expert_desc: "Raporty i sandbox",
+  stats_title: "Statystyki ochrony",
+  stat_blocked: "Łącznie zablokowano",
+  stat_session: "Ta sesja",
+  history_title: "Ostatnie zagrożenia",
+  history_empty: "Brak zablokowanych zagrożeń. 🎉",
+  clear_btn: "Wyczyść",
+  footer_text: "Ochrona wspierana przez AI",
+  reset_btn: "Zeruj licznik",
+  risk_dangerous: "Niebezpieczne",
+  risk_suspicious: "Podejrzane",
 };
 
-let uiLang = "en";
-
 function t(key) {
-  return (TRANSLATIONS[uiLang] || TRANSLATIONS.en)[key] || key;
+  return UI[key] ?? key;
 }
 
 function applyTranslations() {
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const key = el.getAttribute("data-i18n");
     if (t(key)) el.textContent = t(key);
-  });
-}
-
-async function detectLanguage() {
-  return new Promise(resolve => {
-    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-      if (tabs[0]?.id) {
-        chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id },
-          func: () => document.documentElement.lang || navigator.language || "en"
-        }).then(results => {
-          const lang = results?.[0]?.result || "en";
-          resolve(lang.slice(0, 2).toLowerCase());
-        }).catch(() => resolve("en"));
-      } else {
-        resolve("en");
-      }
-    });
   });
 }
 
@@ -112,6 +74,9 @@ function renderHistory(history) {
     return;
   }
 
+  const localeOpts = { hour: "2-digit", minute: "2-digit" };
+  const dateOpts = { month: "short", day: "numeric" };
+
   history.slice(0, 15).forEach(entry => {
     const li = document.createElement("li");
     li.className = "history-item";
@@ -119,8 +84,8 @@ function renderHistory(history) {
     const riskClass = entry.risk_level === "dangerous" ? "risk-danger" : "risk-suspicious";
     const riskLabel = t(`risk_${entry.risk_level}`);
     const date = new Date(entry.timestamp);
-    const timeStr = date.toLocaleTimeString(uiLang, { hour: "2-digit", minute: "2-digit" });
-    const dateStr = date.toLocaleDateString(uiLang, { month: "short", day: "numeric" });
+    const timeStr = date.toLocaleTimeString("pl-PL", localeOpts);
+    const dateStr = date.toLocaleDateString("pl-PL", dateOpts);
 
     let urlDisplay = entry.url;
     try { urlDisplay = new URL(entry.url).hostname; } catch {}
@@ -143,7 +108,6 @@ async function notifyContentScript(mode) {
 }
 
 async function init() {
-  uiLang = await detectLanguage();
   applyTranslations();
 
   const settings = await loadSettings();

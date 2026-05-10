@@ -30,7 +30,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           data = JSON.parse(text);
         } catch {
-          sendResponse({ ok: false, error: "Invalid JSON from ThinkLink API" });
+          sendResponse({ ok: false, error: "Nieprawidłowy JSON z API ThinkLink" });
           return;
         }
         sendResponse({ ok: true, data });

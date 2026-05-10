@@ -34,8 +34,8 @@ def _get_client():
         api_key = os.environ.get("GROQ_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError(
-                "GROQ_API_KEY is not set. Put it in backend/.env "
-                "(get a key at https://console.groq.com/keys)."
+                "Brak GROQ_API_KEY. Ustaw zmienną w pliku backend/.env "
+                "(klucz: https://console.groq.com/keys)."
             )
         groq_http_timeout = float(
             os.environ.get("GROQ_HTTP_TIMEOUT", "").strip() or "90"
@@ -258,10 +258,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.75),
             [ThreatIndicator(
                 code="HTTPS_DOWNGRADE",
-                description="Redirect chain downgrades from HTTPS to HTTP.",
+                description="Łańcuch przekierowań obniża protokół z HTTPS do HTTP.",
                 severity="high",
             )],
-            "Scan: TLS downgrade in redirect chain.",
+            "Skan: obniżenie TLS w łańcuchu przekierowań.",
         )
 
     if fetch_error or final_status is None:
@@ -270,10 +270,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.40),
             [ThreatIndicator(
                 code="PROBE_FAILED",
-                description=str(fetch_error or "No HTTP response from destination"),
+                description=str(fetch_error or "Brak odpowiedzi HTTP z adresu docelowego"),
                 severity="medium",
             )],
-            "Scan: destination could not be reached from the scanner.",
+            "Skan: nie udało się połączyć ze skanera z miejscem docelowym.",
         )
 
     if (
@@ -286,12 +286,12 @@ def _heuristic_refine_unknown(
             [ThreatIndicator(
                 code="PROBE_HTTP_CHALLENGE",
                 description=(
-                    f"HTTP {final_status} — server blocked the automated fetch "
-                    "(WAF/bot filter). No whitelist used; URL shape and TLS look normal."
+                    f"HTTP {final_status} — serwer zablokował automatyczne pobranie "
+                    "(filtr WAF/bot). Bez whitelisty; kształt URL i TLS wyglądają normalnie."
                 ),
                 severity="low",
             )],
-            f"Scan: HTTP {final_status} treated as bot protection, not a malware signal.",
+            f"Skan: HTTP {final_status} potraktowano jako ochronę antybotową, nie jako sygnał malware.",
         )
 
     if isinstance(final_status, int) and final_status >= 400:
@@ -300,10 +300,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.38),
             [ThreatIndicator(
                 code="HTTP_ERROR_STATUS",
-                description=f"Destination returned HTTP {final_status}",
+                description=f"Cel zwrócił HTTP {final_status}",
                 severity="medium",
             )],
-            f"Scan: HTTP status {final_status}.",
+            f"Skan: status HTTP {final_status}.",
         )
 
     if evidence.get("redirect_insecure_hops"):
@@ -312,10 +312,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.34),
             [ThreatIndicator(
                 code="INSECURE_REDIRECT_HOP",
-                description="Redirect path includes HTTP after the first hop.",
+                description="Ścieżka przekierowań zawiera HTTP po pierwszym skoku.",
                 severity="medium",
             )],
-            "Scan: insecure redirect hop detected.",
+            "Skan: wykryto niezabezpieczony skok przekierowania.",
         )
 
     if is_risky_tld and not well_known:
@@ -325,10 +325,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.34 if sev == "medium" else 0.26),
             [ThreatIndicator(
                 code="HIGH_RISK_TLD",
-                description=f"TLD {tld} is commonly abused; treat with extra caution.",
+                description=f"TLD {tld} jest często nadużywane; zachowaj większą ostrożność.",
                 severity=sev,
             )],
-            "Scan: high-risk TLD pattern with limited reputation context.",
+            "Skan: wzorzec ryzykownej końcówki domeny przy ograniczonym kontekście reputacji.",
         )
 
     very_new = age is not None and age < 7
@@ -338,10 +338,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.36),
             [ThreatIndicator(
                 code="VERY_NEW_DOMAIN",
-                description="Domain registered within the last 7 days.",
+                description="Domena zarejestrowana w ciągu ostatnich 7 dni.",
                 severity="medium",
             )],
-            "Scan: very new domain registration.",
+            "Skan: bardzo świeża rejestracja domeny.",
         )
 
     try:
@@ -362,7 +362,7 @@ def _heuristic_refine_unknown(
             RiskLevel.SAFE,
             min(max(risk_score, 0.08), 0.16),
             [],
-            "Scan: HTTPS OK and no strong static risk signals.",
+            "Skan: HTTPS OK i brak silnych sygnałów statycznego ryzyka.",
         )
 
     if scheme == "http" and not well_known:
@@ -371,10 +371,10 @@ def _heuristic_refine_unknown(
             max(risk_score, 0.28),
             [ThreatIndicator(
                 code="HTTP_NOT_HTTPS",
-                description="Final URL uses unencrypted HTTP.",
+                description="Końcowy adres używa nieszyfrowanego HTTP.",
                 severity="low",
             )],
-            "Scan: destination is HTTP-only.",
+            "Skan: miejsce docelowe tylko przez HTTP.",
         )
 
     return (
@@ -382,101 +382,42 @@ def _heuristic_refine_unknown(
         max(risk_score, 0.24),
         [ThreatIndicator(
             code="UNVERIFIED_LINK",
-            description="Static checks found no critical issues; classification remains cautious.",
+            description="Sprawdzenia statyczne nie wykazały krytycznych problemów; klasyfikacja ostrożna.",
             severity="low",
         )],
-        "Scan: no strong safe/unsafe match — marked cautious.",
+        "Skan: brak wyraźnego dopasowania bezpieczne/niebezpieczne — oznaczono ostrożnie.",
     )
 
 
-def _explanation_lang_from_evidence(evidence: Dict[str, Any]) -> str:
-    blob = f"{evidence.get('url') or ''} {evidence.get('final_url') or ''}".lower()
-    ctx = (evidence.get("context_text") or "")[:300].lower()
-    comb = f"{blob} {ctx}"
-    if ".pl" in comb or any(
-        ch in comb for ch in ("ą", "ć", "ę", "ł", "ń", "ó", "ś", "ź", "ż")
-    ):
-        return "pl"
-    if ".de" in comb or ".at" in comb:
-        return "de"
-    return "en"
-
-
 def _base_scan_explanation(
-    lang: str,
     level: str,
     well_known: bool,
     evidence: Dict[str, Any],
 ) -> str:
     fe = bool(evidence.get("fetch_error") or evidence.get("http_status") is None)
-    if lang == "pl":
-        if level == "dangerous":
-            return (
-                "Wykryto silne sygnały ryzyka w automatycznej ocenie "
-                "(struktura linku, sonda HTTP lub domena)."
-            )
-        if level == "suspicious":
-            return (
-                "Automatyczna weryfikacja wykazała sygnały ostrzegawcze; "
-                "zobacz wskaźniki i skrót sandbox."
-            )
-        if well_known and level == "unknown":
-            return (
-                "Host jest rozpoznawalny; skan ma ograniczone dane techniczne "
-                "— sandbox może doprecyzować wynik."
-            )
-        if fe:
-            return (
-                "Skaner nie połączył się z adresem docelowym; "
-                "ocena opiera się na dostępnych sygnałach."
-            )
-        return (
-            "Wstępna klasyfikacja jest niejednoznaczna na podstawie danych skanowania."
-        )
-    if lang == "de":
-        if level == "dangerous":
-            return (
-                "Die automatische Prüfung zeigt starke Risikosignale "
-                "(URL-Struktur, HTTP-Probe oder Domain)."
-            )
-        if level == "suspicious":
-            return (
-                "Die automatische Prüfung zeigt Vorsichtssignale; "
-                "siehe Indikatoren und Sandbox-Kurzfassung."
-            )
-        if well_known and level == "unknown":
-            return (
-                "Weit verbreiteter Host; begrenzte technische Daten — "
-                "Sandbox kann das Ergebnis verfeinern."
-            )
-        if fe:
-            return (
-                "Der Scanner erreichte das Ziel nicht; "
-                "die Einschätzung stützt sich nur auf verfügbare Signale."
-            )
-        return "Vorläufige Einordnung aus den Scan-Daten nicht eindeutig."
-
     if level == "dangerous":
         return (
-            "Strong risk signals from the automated link check "
-            "(URL structure, HTTP probe, or domain metadata)."
+            "Wykryto silne sygnały ryzyka w automatycznej ocenie "
+            "(struktura linku, sonda HTTP lub domena)."
         )
     if level == "suspicious":
         return (
-            "The automated check found cautionary signals; "
-            "review indicators and the sandbox summary."
+            "Automatyczna weryfikacja wykazała sygnały ostrzegawcze; "
+            "zobacz wskaźniki i skrót sandbox."
         )
     if well_known and level == "unknown":
         return (
-            "Widely recognized host; limited technical data from this scan — "
-            "sandbox may refine the result."
+            "Host jest rozpoznawalny; skan ma ograniczone dane techniczne "
+            "— sandbox może doprecyzować wynik."
         )
     if fe:
         return (
-            "The scanner could not reach the destination; "
-            "assessment uses available signals only."
+            "Skaner nie połączył się z adresem docelowym; "
+            "ocena opiera się na dostępnych sygnałach."
         )
-    return "Preliminary classification is inconclusive from the current scan data."
+    return (
+        "Wstępna klasyfikacja jest niejednoznaczna na podstawie danych skanowania."
+    )
 
 
 def _base_scan_verdict(evidence: Dict[str, Any]) -> Dict[str, Any]:
@@ -502,8 +443,7 @@ def _base_scan_verdict(evidence: Dict[str, Any]) -> Dict[str, Any]:
     else:
         level, score = "unknown", 0.18
 
-    lang = _explanation_lang_from_evidence(evidence)
-    explanation = _base_scan_explanation(lang, level, well_known, evidence)
+    explanation = _base_scan_explanation(level, well_known, evidence)
 
     return {
         "risk_level": level,
@@ -533,14 +473,14 @@ async def analyze_link(request: LinkAnalysisRequest) -> LinkAnalysisResult:
             is_safe=False,
             indicators=[ThreatIndicator(
                 code="ANALYZER_ERROR",
-                description=f"Analyzer crashed: {type(e).__name__}",
+                description=f"Błąd analizatora: {type(e).__name__}",
                 severity="medium",
             )],
             ai_assessment=json.dumps({
                 "risk_level": "suspicious",
                 "risk_score": 0.3,
                 "threat_type": "unknown",
-                "explanation": f"Analyzer error: {type(e).__name__}: {e}",
+                "explanation": f"Błąd analizatora: {type(e).__name__}: {e}",
                 "threats": [],
             }, ensure_ascii=False),
         )
@@ -561,10 +501,10 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
         if parsed.scheme not in ("http", "https"):
             return _make_unknown_result(
                 url,
-                f"Unsupported URL scheme: {parsed.scheme or '(none)'}"
+                f"Nieobsługiwany schemat URL: {parsed.scheme or '(brak)'}"
             )
     except Exception:
-        return _make_unknown_result(url, "Could not parse URL")
+        return _make_unknown_result(url, "Nie można sparsować adresu URL")
 
     ext_info = tldextract.extract(url)
     registered_domain = ext_info.registered_domain or parsed.netloc
@@ -764,16 +704,7 @@ async def _analyze_link_uncached(request: LinkAnalysisRequest, url: str) -> Link
             verdict_out["risk_score"] = round(risk_score, 3)
             expl_prev = str(verdict_out.get("explanation") or "").strip()
             if "sandbox" not in expl_prev.lower():
-                loc = _guess_sandbox_locale(provisional)
-                note = (
-                    "Dodatkowa ocena symulacji sandbox podnosi klasyfikację ryzyka."
-                    if loc == "pl"
-                    else (
-                        "Die Sandbox-Simulation stuft das Risiko höher ein."
-                        if loc == "de"
-                        else "Sandbox simulation assessment raises the risk classification."
-                    )
-                )
+                note = "Dodatkowa ocena symulacji sandbox podnosi klasyfikację ryzyka."
                 verdict_out["explanation"] = (
                     (expl_prev + " " + note).strip() if expl_prev else note
                 )
@@ -800,7 +731,7 @@ def _url_shape_evidence(url: str, parsed) -> List[ThreatIndicator]:
     if re.match(r"https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", url):
         found.append(ThreatIndicator(
             code="IP_ADDRESS_URL",
-            description="URL uses raw IP address instead of domain name",
+            description="Adres URL używa surowego IP zamiast nazwy domeny",
             severity="high",
         ))
 
@@ -808,14 +739,14 @@ def _url_shape_evidence(url: str, parsed) -> List[ThreatIndicator]:
     if decoded != url and len(decoded) < len(url) * 0.7:
         found.append(ThreatIndicator(
             code="HEAVY_URL_ENCODING",
-            description="URL contains excessive percent-encoding (possible obfuscation)",
+            description="Nadmierne kodowanie procentowe w URL (możliwa obfuskacja)",
             severity="medium",
         ))
 
     if "@" in (parsed.netloc or ""):
         found.append(ThreatIndicator(
             code="AT_SIGN_IN_URL",
-            description="URL contains @ symbol — displayed domain may differ from actual destination",
+            description="W adresie jest znak @ — wyświetlana domena może różnić się od faktycznego celu",
             severity="critical",
         ))
 
@@ -823,14 +754,14 @@ def _url_shape_evidence(url: str, parsed) -> List[ThreatIndicator]:
     if subdomain and len(subdomain) > 50:
         found.append(ThreatIndicator(
             code="LONG_SUBDOMAIN",
-            description="Unusually long subdomain — may be disguising legitimate domain",
+            description="Nietypowo długa subdomena — może maskować prawdziwą domenę",
             severity="low",
         ))
 
     if "/../" in url or "/.//" in url:
         found.append(ThreatIndicator(
             code="PATH_TRAVERSAL",
-            description="URL contains path traversal sequences",
+            description="W ścieżce URL wykryto sekwencje path traversal",
             severity="medium",
         ))
 
@@ -884,7 +815,7 @@ async def _probe_url(url: str, max_hops: int = 8) -> Dict[str, Any]:
             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 ThinkLink/2.0"
         ),
         "Accept": "*/*",
-        "Accept-Language": "en,pl;q=0.8",
+        "Accept-Language": "pl,en;q=0.5",
     }
 
     try:
@@ -1058,30 +989,18 @@ async def _get_domain_info(domain: str) -> Optional[DomainInfo]:
 
 
 
-_SANDBOX_SYSTEM_PROMPT = """You are ThinkLink's sandbox narrative generator for a browser security extension.
+_SANDBOX_SYSTEM_PROMPT = """Jesteś generatorem narracji sandbox dla rozszerzenia ThinkLink.
 
-You do NOT run a real browser. You receive a structured summary from ThinkLink's URL scanner (redirects, domain metadata, threat indicators, and the base automated verdict fields in ai_assessment_brief). Your job is to produce a plausible chronological timeline AS IF a headless browser had visited the page, consistent with that evidence.
+Nie uruchamiasz prawdziwej przeglądarki. Dostajesz ustrukturyzowane podsumowanie ze skanera ThinkLink (przekierowania, metadane domeny, wskaźniki zagrożeń oraz pola werdyktu w ai_assessment_brief). Twoje zadanie: wygenerować spójną chronologiczną oś czasu, JAKBY przeglądarka headless odwiedziła stronę — zgodnie z tymi dowodami.
 
-Rules:
-- Output ONE JSON object only. No markdown, no commentary.
-- Keys: "verdict" (string), "duration_seconds" (number), "events_detected" (array of objects with "time" (number, seconds) and "event" (string)), "assessed_risk_level" (string: exactly one of "safe", "suspicious", "dangerous" — your summary of threat from the same evidence; must align with the verdict).
-- Use 4–8 events. Times must be strictly increasing, between ~0.5 and duration_seconds.
-- "verdict": one line, strong risk tone matching the scan. Prefix with a clear risk label in the user's language (e.g. Polish: "WYSOKIE RYZYKO —", "PODEJRZANE —"; English: "HIGH RISK —", "SUSPICIOUS —").
-- Match the "preferred_language" field from the user message ("pl", "de", or "en") for all user-visible strings.
-- Do not invent specific malware family names, exact C2 hostnames, or brands not implied by the evidence. Stay faithful to the provided indicators.
-- This is an inferred educational simulation, not a claim of real instrumentation."""
-
-
-def _guess_sandbox_locale(analysis: LinkAnalysisResult) -> str:
-    parts = [analysis.url or ""]
-    if analysis.redirect_chain and analysis.redirect_chain.final_url:
-        parts.append(analysis.redirect_chain.final_url)
-    blob = " ".join(parts).lower()
-    if ".pl" in blob:
-        return "pl"
-    if ".de" in blob or ".at" in blob:
-        return "de"
-    return "en"
+Reguły:
+- Zwróć JEDEN obiekt JSON. Bez markdownu i komentarzy.
+- Klucze: "verdict" (string), "duration_seconds" (liczba), "events_detected" (tablica obiektów z "time" (liczba sekund) i "event" (string)), "assessed_risk_level" (string: dokładnie jedna z wartości "safe", "suspicious", "dangerous" — zgodnie z oceną ryzyka z tych samych dowodów i ze werdyktem).
+- Użyj 4–8 zdarzeń. Czasy rosnąco, między ~0.5 a duration_seconds.
+- "verdict": jedna linia, mocny ton ryzyka zgodny ze skanem. Prefiks etykietą ryzyka po polsku (np. "WYSOKIE RYZYKO —", "PODEJRZANE —", "NISKIE RYZYKO —").
+- Wszystkie teksty widoczne dla użytkownika (werdykt i opisy zdarzeń) pisz PO POLSKU.
+- Nie wymyślaj nazw rodzin malware, dokładnych hostów C2 ani marek spoza dowodów.
+- To wyłącznie symulacja edukacyjna wnioskowana z danych — nie twierdzenia o rzeczywistej instrumentacji."""
 
 
 def _sandbox_evidence_pack(analysis: LinkAnalysisResult) -> Dict[str, Any]:
@@ -1146,14 +1065,9 @@ def _parse_sandbox_json(text: str) -> Dict[str, Any]:
 
 
 def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) -> Dict[str, Any]:
-    locale = _guess_sandbox_locale(analysis)
     verdict = str(raw.get("verdict") or "").strip()
     if not verdict:
-        verdict = (
-            "NIEPOTWIERDZONA SYMULACJA — model nie zwrócił werdyktu."
-            if locale == "pl"
-            else "UNCONFIRMED SIMULATION — model returned no verdict."
-        )
+        verdict = "NIEPOTWIERDZONA SYMULACJA — model nie zwrócił werdyktu."
     try:
         duration = float(raw.get("duration_seconds"))
     except (TypeError, ValueError):
@@ -1183,11 +1097,7 @@ def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) ->
         events = [
             {
                 "time": 1.0,
-                "event": (
-                    "Załadowanie dokumentu (symulacja)."
-                    if locale == "pl"
-                    else "Document load (simulation)."
-                ),
+                "event": "Załadowanie dokumentu (symulacja).",
             },
         ]
     assessed: Optional[str] = None
@@ -1204,21 +1114,12 @@ def _normalize_sandbox_raw(raw: Dict[str, Any], analysis: LinkAnalysisResult) ->
     }
 
 
-def _loc_msg(locale: str, pl: str, de: str, en: str) -> str:
-    if locale == "pl":
-        return pl
-    if locale == "de":
-        return de
-    return en
-
-
 def _heuristic_sandbox_timeline_messages(
     analysis: LinkAnalysisResult,
-    locale: str,
     *,
     max_events: int = 12,
 ) -> List[str]:
-    """Same underlying scan as main heuristics — surface redirects, WHOIS, scores, all indicators."""
+    """Te same dane co heurystyka skanu — łańcuch przekierowań, WHOIS, wynik i wskaźniki."""
     lvl = (
         analysis.risk_level.value
         if isinstance(analysis.risk_level, RiskLevel)
@@ -1228,166 +1129,69 @@ def _heuristic_sandbox_timeline_messages(
     lines: List[str] = []
 
     lines.append(
-        _loc_msg(
-            locale,
-            "Żądanie początkowe: zestawienie połączenia z hostem docelowym.",
-            "Erste Anfrage: Verbindungsaufbau zum Zielhost.",
-            "Initial request: connection setup to target host.",
-        )
+        "Żądanie początkowe: zestawienie połączenia z hostem docelowym.",
     )
 
     pct = round(float(analysis.risk_score or 0) * 100)
-    lines.append(
-        _loc_msg(
-            locale,
-            f"Heurystyka ThinkLink: poziom {lvl.upper()}, szacowane ryzyko ~{pct}%.",
-            f"ThinkLink-Heuristik: {lvl.upper()}, geschätztes Risiko ~{pct}%.",
-            f"ThinkLink heuristic: {lvl.upper()}, estimated risk ~{pct}%.",
-        )
-    )
+    lines.append(f"Heurystyka ThinkLink: poziom {lvl.upper()}, szacowane ryzyko ~{pct}%.")
 
     rc = analysis.redirect_chain
     if rc and rc.redirect_count and rc.hops:
-        lines.append(
-            _loc_msg(
-                locale,
-                f"Łańcuch przekierowań: {rc.redirect_count} skok(ów).",
-                f"Umleitungskette: {rc.redirect_count} Sprünge.",
-                f"Redirect chain: {rc.redirect_count} hop(s).",
-            )
-        )
+        lines.append(f"Łańcuch przekierowań: {rc.redirect_count} skok(ów).")
         for i, hop in enumerate(rc.hops[:4], start=1):
             if len(lines) >= max_events - 1:
                 break
             show = hop if len(hop) <= 76 else hop[:73] + "…"
-            lines.append(
-                _loc_msg(
-                    locale,
-                    f"Hop #{i}: {show}",
-                    f"Hop {i}: {show}",
-                    f"Hop {i}: {show}",
-                )
-            )
+            lines.append(f"Hop #{i}: {show}")
 
     di = analysis.domain_info
     if di and len(lines) < max_events:
-        lines.append(
-            _loc_msg(
-                locale,
-                f"Domena (registered): {di.domain}",
-                f"Registrierte Domain: {di.domain}",
-                f"Registered domain: {di.domain}",
-            )
-        )
+        lines.append(f"Domena (registered): {di.domain}")
         if di.age_days is not None and len(lines) < max_events:
-            lines.append(
-                _loc_msg(
-                    locale,
-                    f"Szacowany wiek rejestracji WHOIS: ~{di.age_days} dni.",
-                    f"Geschätztes WHOIS-Alter: ~{di.age_days} Tage.",
-                    f"Estimated WHOIS registration age: ~{di.age_days} days.",
-                )
-            )
+            lines.append(f"Szacowany wiek rejestracji WHOIS: ~{di.age_days} dni.")
         if di.is_very_new and len(lines) < max_events:
-            lines.append(
-                _loc_msg(
-                    locale,
-                    "Bardzo świeża domena — zwiększona ostrożność.",
-                    "Sehr neue Domain — erhöhte Vorsicht.",
-                    "Very new domain — elevated caution.",
-                )
-            )
+            lines.append("Bardzo świeża domena — zwiększona ostrożność.")
         elif di.is_new and len(lines) < max_events:
-            lines.append(
-                _loc_msg(
-                    locale,
-                    "Domena stosunkowo nowa (< 30 dni).",
-                    "Domain relativ neu (< 30 Tage).",
-                    "Relatively new domain (< 30 days).",
-                )
-            )
+            lines.append("Domena stosunkowo nowa (< 30 dni).")
         if di.country and len(lines) < max_events:
-            lines.append(
-                _loc_msg(
-                    locale,
-                    f"Kraj rejestracji (WHOIS): {di.country}",
-                    f"Registrierungsland (WHOIS): {di.country}",
-                    f"Registration country (WHOIS): {di.country}",
-                )
-            )
+            lines.append(f"Kraj rejestracji (WHOIS): {di.country}")
 
     if analysis.file_download and len(lines) < max_events:
         ext = str(analysis.file_download).lstrip(".")
-        lines.append(
-            _loc_msg(
-                locale,
-                f"Odpowiedź sugeruje plik do pobrania (typ: .{ext}).",
-                f"Antwort deutet auf Download hin (Typ: .{ext}).",
-                f"Response suggests a file download (type: .{ext}).",
-            )
-        )
+        lines.append(f"Odpowiedź sugeruje plik do pobrania (typ: .{ext}).")
 
     for ind in indicators:
         if len(lines) >= max_events:
             break
-        lines.append(
-            _loc_msg(
-                locale,
-                f"Wskaźnik [{ind.code}] ({ind.severity}): {ind.description}",
-                f"Indikator [{ind.code}] ({ind.severity}): {ind.description}",
-                f"Indicator [{ind.code}] ({ind.severity}): {ind.description}",
-            )
-        )
+        lines.append(f"Wskaźnik [{ind.code}] ({ind.severity}): {ind.description}")
 
     if not indicators and len(lines) < max_events:
         lines.append(
-            _loc_msg(
-                locale,
-                "Brak osobnych rekordów wskaźników — klasyfikacja opiera się na ogólnych sygnałach.",
-                "Keine einzelnen Indikatoren — Klassifikation aus allgemeinen Signalen.",
-                "No separate indicator rows — classification uses aggregate signals.",
-            )
+            "Brak osobnych rekordów wskaźników — klasyfikacja opiera się na ogólnych sygnałach.",
         )
 
     return lines[:max_events]
 
 
-def _heuristic_sandbox_verdict(locale: str, lvl: str) -> str:
-    if locale == "pl":
-        if lvl == "dangerous":
-            return (
-                "WYSOKIE RYZYKO — sygnały z analizy ThinkLink wskazują na realne zagrożenie."
-            )
-        if lvl == "suspicious":
-            return "PODEJRZANE — kontekst URL i sygnały uzasadniają ostrożność."
-        return (
-            "SYMULACJA OSTROŻNOŚCI — poziom zagrożenia z analizy jest niejednoznaczny."
-        )
-    if locale == "de":
-        if lvl == "dangerous":
-            return (
-                "HOHES RISIKO — ThinkLink-Scan deutet auf eine reale Bedrohung hin."
-            )
-        if lvl == "suspicious":
-            return "VERDACHT — URL-Kontext und Signale rechtfahren Vorsicht."
-        return (
-            "VORSICHT — Risikoniveau aus dem Scan nicht eindeutig."
-        )
+def _heuristic_sandbox_verdict(lvl: str) -> str:
     if lvl == "dangerous":
-        return "HIGH RISK — ThinkLink scan signals suggest a real threat."
+        return (
+            "WYSOKIE RYZYKO — sygnały z analizy ThinkLink wskazują na realne zagrożenie."
+        )
     if lvl == "suspicious":
-        return "SUSPICIOUS — URL context and signals warrant caution."
-    return "CAUTION SIMULATION — scan risk level is inconclusive."
+        return "PODEJRZANE — kontekst URL i sygnały uzasadniają ostrożność."
+    return (
+        "SYMULACJA OSTROŻNOŚCI — poziom zagrożenia z analizy jest niejednoznaczny."
+    )
 
 
 def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
-    locale = _guess_sandbox_locale(analysis)
     lvl = (
         analysis.risk_level.value
         if isinstance(analysis.risk_level, RiskLevel)
         else str(analysis.risk_level)
     )
-    msgs = _heuristic_sandbox_timeline_messages(analysis, locale, max_events=12)
+    msgs = _heuristic_sandbox_timeline_messages(analysis, max_events=12)
     events: List[Dict[str, Any]] = []
     t = 1.0
 
@@ -1399,7 +1203,7 @@ def _heuristic_sandbox_report(analysis: LinkAnalysisResult) -> Dict[str, Any]:
     for m in msgs:
         add(m)
 
-    verdict = _heuristic_sandbox_verdict(locale, lvl)
+    verdict = _heuristic_sandbox_verdict(lvl)
 
     duration = max(8.0, min(26.0, t + 2.0))
     for e in events:
@@ -1433,10 +1237,9 @@ def _sandbox_api_response(url: str, normalized: Dict[str, Any]) -> Dict[str, Any
 
 
 async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, Any]:
-    locale = _guess_sandbox_locale(analysis)
     pack = _sandbox_evidence_pack(analysis)
     user_msg = json.dumps(
-        {"preferred_language": locale, "thinklink_scan": pack},
+        {"preferred_language": "pl", "thinklink_scan": pack},
         ensure_ascii=False,
         indent=2,
     )
@@ -1447,12 +1250,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
         _get_client()
     except RuntimeError:
         fb = _heuristic_sandbox_report(analysis)
-        note = (
-            "[Ustaw GROQ_API_KEY w backend/.env] "
-            if locale == "pl"
-            else "[Set GROQ_API_KEY in backend/.env] "
-        )
-        fb["verdict"] = note + fb["verdict"]
+        fb["verdict"] = "[Ustaw GROQ_API_KEY w backend/.env] " + fb["verdict"]
         return _sandbox_api_response(analysis.url, fb)
 
     async def _call() -> Dict[str, Any]:
@@ -1495,11 +1293,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
             break
 
     fb = _heuristic_sandbox_report(analysis)
-    note = (
-        "(API sandbox niedostępne — podgląd z samych danych skanu.) "
-        if locale == "pl"
-        else "(Sandbox API unavailable — timeline from scan data only.) "
-    )
+    note = "(API sandbox niedostępne — podgląd z samych danych skanu.) "
     if last_exc:
         note = f"({type(last_exc).__name__}) " + note
     fb["verdict"] = note + fb["verdict"]
@@ -1508,7 +1302,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
 
 async def sandbox_simulation_for_url(url: str) -> Dict[str, Any]:
     if not url or not str(url).strip():
-        raise ValueError("url is required")
+        raise ValueError("wymagany jest parametr url")
     canonical = _canonical_url(url.strip())
     analysis = await analyze_link(LinkAnalysisRequest(url=canonical))
     return await _groq_sandbox_simulation(analysis)

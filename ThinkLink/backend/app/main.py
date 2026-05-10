@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import analysis
 
 app = FastAPI(
-    title="ThinkLink Link Analysis API",
-    description="Real-time link safety analysis for browser extension",
+    title="ThinkLink — API analizy linków",
+    description="Analiza bezpieczeństwa adresów URL dla rozszerzenia przeglądarki.",
     version="1.0.0",
 )
 
