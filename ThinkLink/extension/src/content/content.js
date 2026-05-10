@@ -460,6 +460,16 @@
   }
 
   function getRawLinkUrl(el) {
+    const blockedRestore =
+      el.getAttribute?.("data-thinklink-blocked") === "true"
+      && typeof el.dataset?.originalHref === "string"
+      && el.dataset.originalHref.trim()
+        ? el.dataset.originalHref.trim()
+        : "";
+    if (blockedRestore && /^https?:\/\//i.test(blockedRestore)) {
+      return blockedRestore;
+    }
+
     const tag = el.tagName;
     if (tag === "A" || tag === "AREA") {
       const attrHref = el.getAttribute("href") || "";
@@ -591,9 +601,18 @@
 
       if (!isAnalyzableUrl(raw)) return;
       if (el.hasAttribute(PROCESSED_ATTR)) {
-        if (url && peekCache(url)) return;
-        if (el.dataset.thinklinkPending === "1") return;
-        el.removeAttribute(PROCESSED_ATTR);
+        const cached = url ? peekCache(url) : null;
+        if (cached) {
+          const lvl = String(cached.risk_level || "").toLowerCase();
+          // SPA (React/Vue) często nadpisuje href / usuwa blokadę przy re-renderze — dla
+          // dangerous/suspicious musimy periodycznie powtarzać applyResult, żeby link nie został
+          // „odblokowany” bez whitelisty.
+          if (lvl !== "dangerous" && lvl !== "suspicious") return;
+        } else if (el.dataset.thinklinkPending === "1") {
+          return;
+        } else {
+          el.removeAttribute(PROCESSED_ATTR);
+        }
       }
       elements.push(el);
     };
@@ -782,9 +801,12 @@
 
   function unblockElement(el) {
     if (el.getAttribute("data-thinklink-blocked") !== "true") return;
-    if (el.tagName === "A" && el.dataset.originalHref) {
+    if (
+      (el.tagName === "A" || el.tagName === "AREA")
+      && el.dataset.originalHref
+    ) {
       try {
-        el.href = el.dataset.originalHref;
+        el.setAttribute("href", el.dataset.originalHref);
       } catch {
         /* ignore */
       }
@@ -797,6 +819,9 @@
     if (h) {
       el.removeEventListener("click", h, true);
       el.removeEventListener("mousedown", h, true);
+      el.removeEventListener("pointerdown", h, true);
+      el.removeEventListener("touchstart", h, true);
+      el.removeEventListener("auxclick", h, true);
       delete el.__thinklinkBlockHandler;
     }
   }
@@ -869,23 +894,50 @@
 
 
   function blockElement(el, result) {
+    const prevHandler = el.__thinklinkBlockHandler;
+    if (prevHandler) {
+      el.removeEventListener("click", prevHandler, true);
+      el.removeEventListener("mousedown", prevHandler, true);
+      el.removeEventListener("pointerdown", prevHandler, true);
+      el.removeEventListener("touchstart", prevHandler, true);
+      el.removeEventListener("auxclick", prevHandler, true);
+      delete el.__thinklinkBlockHandler;
+    }
+
     el.setAttribute("data-thinklink-blocked", "true");
     el.setAttribute("aria-disabled", "true");
     el.setAttribute("title", t("blocked_tooltip"));
 
-    if (el.tagName === "A") {
-      el.dataset.originalHref = el.href;
-      el.href = "javascript:void(0)";
+    const targetHref =
+      typeof result.url === "string"
+        ? result.url.trim()
+        : String(getLinkUrl(el) || el.getAttribute?.("href") || "");
+    if ((el.tagName === "A" || el.tagName === "AREA") && targetHref) {
+      try {
+        const abs =
+          /^https?:\/\//i.test(targetHref)
+            ? targetHref
+            : new URL(targetHref, window.location.href).href;
+        el.dataset.originalHref = abs;
+      } catch {
+        el.dataset.originalHref = targetHref;
+      }
+      el.setAttribute("href", "#thinklink-held");
     }
 
     const blocker = (e) => {
       e.preventDefault();
+      e.stopPropagation();
       e.stopImmediatePropagation();
       showBlockedNotice(result);
+      return false;
     };
     el.__thinklinkBlockHandler = blocker;
-    el.addEventListener("click", blocker, true);
+    el.addEventListener("pointerdown", blocker, true);
+    el.addEventListener("touchstart", blocker, true);
     el.addEventListener("mousedown", blocker, true);
+    el.addEventListener("click", blocker, true);
+    el.addEventListener("auxclick", blocker, true);
   }
 
   function showBlockedNotice(result) {
