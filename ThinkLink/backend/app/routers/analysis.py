@@ -7,10 +7,8 @@ from app.models.schemas import (
     BatchAnalysisResult,
     LinkAnalysisRequest,
     LinkAnalysisResult,
-    TextPhishingAnalysisResponse,
-    TextPhishingRequest,
 )
-from app.services.analyzer import analyze_link, analyze_text_phishing, sandbox_simulation_for_url
+from app.services.analyzer import analyze_link, sandbox_simulation_for_url
 
 router = APIRouter()
 
@@ -56,15 +54,6 @@ async def analyze_links(request: BatchAnalysisRequest):
 @router.post("/analyze/single", response_model=LinkAnalysisResult)
 async def analyze_single_link(request: LinkAnalysisRequest):
     return await analyze_link(request)
-
-
-@router.post("/analyze/text-phishing", response_model=TextPhishingAnalysisResponse)
-async def analyze_text_phishing_endpoint(request: TextPhishingRequest):
-    try:
-        data = await analyze_text_phishing(request.text)
-        return TextPhishingAnalysisResponse(**data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/sandbox/video")
