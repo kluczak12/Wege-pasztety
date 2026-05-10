@@ -215,7 +215,7 @@ def _heuristic_fallback(text: str) -> PhishingAnalysisResult:
     summary = (
         "Heurystyczna ocena — ustaw GROQ_API_KEY w backendzie, aby włączyć pełną analizę modelu."
         if h_score <= 20
-        else "Heurystyczna ocena (model AI niedostępny) — wykryto sygnały typowe dla wyłudzeń."
+        else "Ocena heurystyczna."
     )
 
     return PhishingAnalysisResult(
@@ -224,7 +224,7 @@ def _heuristic_fallback(text: str) -> PhishingAnalysisResult:
         summary_pl=summary,
         signals=h_sigs[:12],
         urls_flagged=h_urls,
-        engine_note="Uproszczona analiza heurystyczna (Groq niedostępny lub błąd odpowiedzi).",
+        engine_note="Uproszczona analiza heurystyczna.",
     )
 
 
