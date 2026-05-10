@@ -17,6 +17,8 @@
   let scanTimer = null;
   let resultCache = new Map();
   let scanChain = Promise.resolve();
+  /** Jedna pozycja historii / jeden impuls licznika na adres URL w tej karcie (skany powtarzają applyResult). */
+  const threatNotifyOncePerUrl = new Set();
 
   function cacheResult(urlKey, result) {
     resultCache.set(urlKey, {
@@ -783,19 +785,25 @@
 
     if (level === "dangerous") {
       blockElement(el, effective);
-      appendHistory({
-        url: effective.url,
-        risk_level: level,
-        risk_score: effective.risk_score,
-        timestamp: new Date().toISOString(),
-        page: window.location.href,
-        indicators: (effective.indicators || []).map(i => i.code),
-      });
-      safeSendMessage({
-        type: "THREAT_DETECTED",
-        url: effective.url,
-        risk_level: level,
-      });
+      const notifyKey = effective.url
+        ? canonicalUrlForAnalysis(effective.url)
+        : "";
+      if (notifyKey && !threatNotifyOncePerUrl.has(notifyKey)) {
+        threatNotifyOncePerUrl.add(notifyKey);
+        appendHistory({
+          url: effective.url,
+          risk_level: level,
+          risk_score: effective.risk_score,
+          timestamp: new Date().toISOString(),
+          page: window.location.href,
+          indicators: (effective.indicators || []).map(i => i.code),
+        });
+        safeSendMessage({
+          type: "THREAT_DETECTED",
+          url: notifyKey,
+          risk_level: level,
+        });
+      }
     }
   }
 

@@ -2,6 +2,7 @@ import re
 import json
 import asyncio
 import os
+import time
 import aiohttp
 import httpx
 import whois
@@ -76,6 +77,10 @@ CACHE_TTL_UNKNOWN_SECONDS = 3 * 60
 CACHE_MAX_ENTRIES = 5000
 
 _result_cache: Dict[str, Tuple[float, "LinkAnalysisResult"]] = {}
+
+# Odpowiedź GET /sandbox/video — cache ogranicza podwójne wywołania Groq przy tym samym URL.
+_SANDBOX_HTTP_RESPONSE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+SANDBOX_HTTP_CACHE_TTL = float(os.environ.get("SANDBOX_HTTP_CACHE_TTL", "300"))
 
 
 def _cache_get(url: str) -> Optional["LinkAnalysisResult"]:
@@ -1245,6 +1250,17 @@ def _sandbox_api_response(url: str, normalized: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def _sandbox_fallback_user_note(exc: Optional[BaseException]) -> str:
+    """Tekst do wyświetlenia zamiast surowej nazwy wyjątku (np. RateLimitError)."""
+    if exc is None:
+        return "(Symulacja AI chwilowo niedostępna — poniżej skrót z danych skanu ThinkLink.) "
+    name_l = type(exc).__name__.lower()
+    msg_l = str(exc).lower()
+    if "ratelimit" in name_l or "429" in msg_l or "rate limit" in msg_l:
+        return "(Przekroczono limit zapytań do API Groq — odczekaj kilka minut. Poniżej skrót z danych skanu.) "
+    return "(Symulacja sandbox niedostępna — poniżej skrót z danych skanu ThinkLink.) "
+
+
 async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, Any]:
     pack = _sandbox_evidence_pack(analysis)
     user_msg = json.dumps(
@@ -1302,9 +1318,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
             break
 
     fb = _heuristic_sandbox_report(analysis)
-    note = "(API sandbox niedostępne — podgląd z samych danych skanu.) "
-    if last_exc:
-        note = f"({type(last_exc).__name__}) " + note
+    note = _sandbox_fallback_user_note(last_exc)
     fb["verdict"] = note + fb["verdict"]
     return _sandbox_api_response(analysis.url, fb)
 
@@ -1313,8 +1327,21 @@ async def sandbox_simulation_for_url(url: str) -> Dict[str, Any]:
     if not url or not str(url).strip():
         raise ValueError("wymagany jest parametr url")
     canonical = _canonical_url(url.strip())
+    now = time.time()
+    cached = _SANDBOX_HTTP_RESPONSE_CACHE.get(canonical)
+    if cached and cached[0] > now:
+        return cached[1]
     analysis = await analyze_link(LinkAnalysisRequest(url=canonical))
-    return await _groq_sandbox_simulation(analysis)
+    out = await _groq_sandbox_simulation(analysis)
+    ttl = SANDBOX_HTTP_CACHE_TTL
+    if len(_SANDBOX_HTTP_RESPONSE_CACHE) > 400:
+        sorted_items = sorted(
+            _SANDBOX_HTTP_RESPONSE_CACHE.items(), key=lambda kv: kv[1][0]
+        )
+        for k, _ in sorted_items[:80]:
+            _SANDBOX_HTTP_RESPONSE_CACHE.pop(k, None)
+    _SANDBOX_HTTP_RESPONSE_CACHE[canonical] = (now + ttl, out)
+    return out
 
 
 def _coerce_level(value: Any) -> RiskLevel:

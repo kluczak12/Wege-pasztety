@@ -5,6 +5,33 @@ async function updateBadge() {
   chrome.action.setBadgeBackgroundColor({ color: "#dc2626" });
 }
 
+/** Ten sam URL z kilku iframe / powtórzeń — licz tylko raz na sesję rozszerzenia. */
+async function shouldIncrementThreatCounter(url) {
+  const key = String(url || "").trim().slice(0, 2048);
+  if (!key) return true;
+  try {
+    const data = await chrome.storage.session.get(["thinklinkSeenThreatUrls"]);
+    const seen = data.thinklinkSeenThreatUrls;
+    const bag =
+      seen && typeof seen === "object" && !Array.isArray(seen) ? { ...seen } : {};
+    if (bag[key]) {
+      return false;
+    }
+    bag[key] = Date.now();
+    const entries = Object.entries(bag);
+    if (entries.length > 800) {
+      entries.sort((a, b) => a[1] - b[1]);
+      for (let i = 0; i < entries.length - 500; i++) {
+        delete bag[entries[i][0]];
+      }
+    }
+    await chrome.storage.session.set({ thinklinkSeenThreatUrls: bag });
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "THINKLINK_API") {
     (async () => {
@@ -42,13 +69,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "THREAT_DETECTED") {
-    chrome.storage.local.get({ totalBlocked: 0 }, (data) => {
-      const newCount = data.totalBlocked + 1;
-      chrome.storage.local.set({ totalBlocked: newCount }, () => {
-        updateBadge();
-      });
-    });
-    sendResponse({ ok: true });
+    (async () => {
+      try {
+        const inc = await shouldIncrementThreatCounter(msg.url);
+        if (!inc) {
+          sendResponse({ ok: true, deduped: true });
+          return;
+        }
+        const data = await chrome.storage.local.get({ totalBlocked: 0 });
+        const newCount = data.totalBlocked + 1;
+        await chrome.storage.local.set({ totalBlocked: newCount });
+        await updateBadge();
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
   }
 
   if (msg.type === "GET_TOTAL_BLOCKED") {
@@ -59,10 +96,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "RESET_COUNTER") {
-    chrome.storage.local.set({ totalBlocked: 0 }, () => {
-      updateBadge();
-      sendResponse({ ok: true });
-    });
+    (async () => {
+      try {
+        await chrome.storage.local.set({ totalBlocked: 0 });
+        try {
+          await chrome.storage.session.remove("thinklinkSeenThreatUrls");
+        } catch {
+          /* ignore */
+        }
+        await updateBadge();
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
     return true;
   }
 });
