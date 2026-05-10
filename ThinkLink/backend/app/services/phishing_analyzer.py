@@ -213,7 +213,7 @@ def _heuristic_fallback(text: str) -> PhishingAnalysisResult:
     h_score, h_sigs, h_urls = compute_heuristic(t)
     level = _score_to_risk_level(h_score)
     summary = (
-        "Heurystyczna ocena — ustaw GROQ_API_KEY w backendzie, aby włączyć pełną analizę modelu."
+        "Ocena heurystyczna."
         if h_score <= 20
         else "Ocena heurystyczna."
     )
