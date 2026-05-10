@@ -34,8 +34,7 @@ def _get_client():
         api_key = os.environ.get("GROQ_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError(
-                "Brak GROQ_API_KEY. Ustaw zmienną w pliku backend/.env "
-                "(klucz: https://console.groq.com/keys)."
+                "Brak zmiennej środowiskowej GROQ_API_KEY."
             )
         groq_http_timeout = float(
             os.environ.get("GROQ_HTTP_TIMEOUT", "").strip() or "90"
@@ -1260,7 +1259,7 @@ async def _groq_sandbox_simulation(analysis: LinkAnalysisResult) -> Dict[str, An
         _get_client()
     except RuntimeError:
         fb = _heuristic_sandbox_report(analysis)
-        fb["verdict"] = "[Ustaw GROQ_API_KEY w backend/.env] " + fb["verdict"]
+        fb["verdict"] = "Brak zmiennej środowiskowej GROQ_API_KEY. " + fb["verdict"]
         return _sandbox_api_response(analysis.url, fb)
 
     async def _call() -> Dict[str, Any]:
