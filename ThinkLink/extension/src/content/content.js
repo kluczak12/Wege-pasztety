@@ -13,6 +13,7 @@
 
 
   let currentMode = "simple";
+  let userLinkWhitelist = [];
   let scanTimer = null;
   let resultCache = new Map();
   let scanChain = Promise.resolve();
@@ -109,6 +110,7 @@
     section_redirects: "Łańcuch przekierowań",
     hops_suffix: "skoków",
     badge_error_title: "Analiza nie powiodła się — upewnij się, że backend ThinkLink działa.",
+    trust_url_btn: "Zaufaj temu adresowi (whitelist)",
   };
 
   function t(key) {
@@ -205,6 +207,88 @@
     `;
   }
 
+
+  async function syncWhitelist() {
+    if (!isExtensionContextValid()) {
+      userLinkWhitelist = [];
+      return;
+    }
+    return new Promise(resolve => {
+      try {
+        chrome.storage.sync.get({ linkWhitelist: [] }, (data) => {
+          if (chrome.runtime.lastError) {
+            userLinkWhitelist = [];
+            resolve();
+            return;
+          }
+          userLinkWhitelist = Array.isArray(data.linkWhitelist) ? data.linkWhitelist : [];
+          resolve();
+        });
+      } catch {
+        userLinkWhitelist = [];
+        resolve();
+      }
+    });
+  }
+
+  function urlMatchesUserWhitelist(urlStr, entries) {
+    let link;
+    try {
+      link = new URL(urlStr, window.location.href);
+    } catch {
+      return false;
+    }
+    if (link.protocol !== "http:" && link.protocol !== "https:") return false;
+    const lh = link.hostname.toLowerCase();
+
+    for (const raw of entries) {
+      const t = String(raw ?? "").trim();
+      if (!t) continue;
+      let entryUrl;
+      try {
+        entryUrl = new URL(t.includes("://") ? t : `https://${t}`);
+      } catch {
+        continue;
+      }
+      const eh = entryUrl.hostname.toLowerCase();
+      if (lh !== eh && !lh.endsWith(`.${eh}`)) continue;
+      const pathAndQuery = entryUrl.pathname + entryUrl.search;
+      if (pathAndQuery === "/" || pathAndQuery === "") return true;
+      const linkPath = link.pathname + link.search;
+      if (linkPath.startsWith(pathAndQuery)) return true;
+    }
+    return false;
+  }
+
+  function makeWhitelistSafeResult(urlStr) {
+    const key = canonicalUrlForAnalysis(urlStr);
+    return {
+      url: key,
+      risk_level: "safe",
+      risk_score: 0.02,
+      is_safe: true,
+      indicators: [],
+      _tlWhitelistSafe: true,
+      ai_assessment:
+        '{"explanation":"Adres na liście zaufanych użytkownika (whitelist).","threats":[]}',
+    };
+  }
+
+  function whitelistSafeResultIfMatch(urlStr) {
+    if (!userLinkWhitelist.length) return null;
+    return urlMatchesUserWhitelist(urlStr, userLinkWhitelist)
+      ? makeWhitelistSafeResult(urlStr)
+      : null;
+  }
+
+  function suggestedWhitelistEntryFromUrl(urlStr) {
+    try {
+      const u = new URL(urlStr, window.location.href);
+      return u.hostname.toLowerCase();
+    } catch {
+      return String(urlStr || "").trim();
+    }
+  }
 
   async function loadSettings() {
     if (!isExtensionContextValid()) {
@@ -547,10 +631,24 @@
 
 
   async function analyzeLinks(elements) {
+    await syncWhitelist();
+
     const pending = [];
     for (const el of elements) {
       const url = getLinkUrl(el);
       if (!url) continue;
+
+      const wlFirst = whitelistSafeResultIfMatch(url);
+      if (wlFirst) {
+        cacheResult(wlFirst.url, wlFirst);
+        if (!el.hasAttribute(PROCESSED_ATTR)) {
+          el.setAttribute(PROCESSED_ATTR, Math.random().toString(36).slice(2));
+        }
+        delete el.dataset.thinklinkPending;
+        applyResult(el, forUiResult(wlFirst));
+        continue;
+      }
+
       const cached = peekCache(url);
       if (cached) {
         if (!el.hasAttribute(PROCESSED_ATTR)) {
@@ -646,25 +744,60 @@
 
 
   function applyResult(el, result) {
-    const level = String(result.risk_level || "unknown").toLowerCase();
+    const url = getLinkUrl(el);
+    let effective = result;
+    if (url) {
+      const wl = whitelistSafeResultIfMatch(url);
+      if (wl) {
+        cacheResult(wl.url, wl);
+        effective = wl;
+      }
+    }
 
-    injectBadge(el, level, result);
+    const level = String(effective.risk_level || "unknown").toLowerCase();
+
+    if (level !== "dangerous") {
+      unblockElement(el);
+    }
+
+    injectBadge(el, level, effective);
 
     if (level === "dangerous") {
-      blockElement(el, result);
+      blockElement(el, effective);
       appendHistory({
-        url: result.url,
+        url: effective.url,
         risk_level: level,
-        risk_score: result.risk_score,
+        risk_score: effective.risk_score,
         timestamp: new Date().toISOString(),
         page: window.location.href,
-        indicators: result.indicators.map(i => i.code)
+        indicators: (effective.indicators || []).map(i => i.code),
       });
       safeSendMessage({
         type: "THREAT_DETECTED",
-        url: result.url,
-        risk_level: level
+        url: effective.url,
+        risk_level: level,
       });
+    }
+  }
+
+  function unblockElement(el) {
+    if (el.getAttribute("data-thinklink-blocked") !== "true") return;
+    if (el.tagName === "A" && el.dataset.originalHref) {
+      try {
+        el.href = el.dataset.originalHref;
+      } catch {
+        /* ignore */
+      }
+      delete el.dataset.originalHref;
+    }
+    el.removeAttribute("data-thinklink-blocked");
+    el.removeAttribute("aria-disabled");
+    el.removeAttribute("title");
+    const h = el.__thinklinkBlockHandler;
+    if (h) {
+      el.removeEventListener("click", h, true);
+      el.removeEventListener("mousedown", h, true);
+      delete el.__thinklinkBlockHandler;
     }
   }
 
@@ -750,6 +883,7 @@
       e.stopImmediatePropagation();
       showBlockedNotice(result);
     };
+    el.__thinklinkBlockHandler = blocker;
     el.addEventListener("click", blocker, true);
     el.addEventListener("mousedown", blocker, true);
   }
@@ -768,11 +902,31 @@
           <strong>ThinkLink</strong>
           <p>${t("blocked_tooltip")}</p>
           <code>${result.url.slice(0, 80)}${result.url.length > 80 ? "…" : ""}</code>
+          <button type="button" class="tl-notice-trust">${escapeHtml(t("trust_url_btn"))}</button>
         </div>
         <button class="tl-notice-close" aria-label="${escapeHtml(t("modal_close"))}" type="button">✕</button>
       </div>
     `;
     notice.querySelector(".tl-notice-close").addEventListener("click", () => notice.remove());
+    notice.querySelector(".tl-notice-trust").addEventListener("click", async () => {
+      try {
+        const entry = suggestedWhitelistEntryFromUrl(result.url);
+        if (!entry) return;
+        const data = await chrome.storage.sync.get({ linkWhitelist: [] });
+        const list = Array.isArray(data.linkWhitelist) ? [...data.linkWhitelist] : [];
+        const exists = list.some(
+          (x) =>
+            String(x).trim().toLowerCase() === entry.toLowerCase()
+        );
+        if (!exists) {
+          list.push(entry);
+          await chrome.storage.sync.set({ linkWhitelist: list });
+        }
+        notice.remove();
+      } catch (e) {
+        console.error("[ThinkLink] Whitelist:", e);
+      }
+    });
     document.body.appendChild(notice);
     setTimeout(() => notice?.remove(), 5000);
   }
@@ -920,6 +1074,30 @@
   async function syncMode() {
     const settings = await loadSettings();
     currentMode = settings.mode || "simple";
+    await syncWhitelist();
+  }
+
+  async function refreshWhitelistFromStorage() {
+    await syncWhitelist();
+    document.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((el) => {
+      const url = getLinkUrl(el);
+      if (!url) return;
+      const key = canonicalUrlForAnalysis(url);
+      const wl = whitelistSafeResultIfMatch(url);
+      const row = peekCache(url);
+      if (wl) {
+        cacheResult(wl.url, wl);
+        applyResult(el, forUiResult(wl));
+        return;
+      }
+      if (row && row._tlWhitelistSafe) {
+        resultCache.delete(key);
+        el.removeAttribute(PROCESSED_ATTR);
+        delete el.dataset.thinklinkPending;
+        removeThinkLinkBadgesAfter(el);
+      }
+    });
+    void scan();
   }
 
 
@@ -977,6 +1155,15 @@
     });
   } catch {
     shutdownDueToInvalidContext();
+  }
+
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (!extensionAlive || area !== "sync" || !changes.linkWhitelist) return;
+      void refreshWhitelistFromStorage();
+    });
+  } catch {
+    /* ignore */
   }
 
 

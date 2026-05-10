@@ -7,12 +7,19 @@ const UI = {
   stat_blocked: "Łącznie zablokowano",
   stat_session: "Ta sesja",
   history_title: "Ostatnie zagrożenia",
-  history_empty: "Brak zablokowanych zagrożeń. 🎉",
+  history_empty: "Brak zablokowanych zagrożeń",
   clear_btn: "Wyczyść",
   footer_text: "Ochrona wspierana przez AI",
   reset_btn: "Zeruj licznik",
   risk_dangerous: "Niebezpieczne",
   risk_suspicious: "Podejrzane",
+  whitelist_title: "Zaufane adresy",
+  whitelist_hint:
+    "Domena (np. example.com) lub prefiks URL — treść witryn z listy jest traktowana jak zaufana (jak domyślna whitelist ThinkLink).",
+  whitelist_add: "Dodaj",
+  whitelist_remove_aria: "Usuń z listy",
+  whitelist_empty: "Brak wpisów — dodaj domenę lub link.",
+  whitelist_invalid: "Niepoprawny adres — podaj domenę lub http(s)://…",
 };
 
 function t(key) {
@@ -28,12 +35,72 @@ function applyTranslations() {
 
 async function loadSettings() {
   return new Promise(resolve => {
-    chrome.storage.sync.get({ mode: "simple" }, resolve);
+    chrome.storage.sync.get({ mode: "simple", linkWhitelist: [] }, resolve);
   });
 }
 
 async function saveMode(mode) {
   return new Promise(resolve => chrome.storage.sync.set({ mode }, resolve));
+}
+
+function normalizeWhitelistKey(entry) {
+  const raw = String(entry ?? "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    return `${u.hostname.toLowerCase()}${u.pathname}${u.search}`;
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+async function saveWhitelist(list) {
+  const next = Array.isArray(list) ? [...list] : [];
+  await new Promise(resolve => {
+    chrome.storage.sync.set({ linkWhitelist: next }, resolve);
+  });
+}
+
+function renderWhitelistList(entries) {
+  const ul = document.getElementById("whitelist-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "whitelist-empty";
+    li.textContent = t("whitelist_empty");
+    ul.appendChild(li);
+    return;
+  }
+
+  list.forEach((entry, index) => {
+    const li = document.createElement("li");
+    li.className = "whitelist-item";
+    const span = document.createElement("span");
+    span.className = "whitelist-entry-text";
+    span.textContent = entry;
+    span.title = entry;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "whitelist-remove-btn";
+    btn.setAttribute("aria-label", t("whitelist_remove_aria"));
+    btn.dataset.index = String(index);
+    btn.textContent = "✕";
+    li.appendChild(span);
+    li.appendChild(btn);
+    ul.appendChild(li);
+  });
+
+  ul.querySelectorAll(".whitelist-remove-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const i = Number(btn.dataset.index);
+      const next = list.filter((_, j) => j !== i);
+      await saveWhitelist(next);
+      renderWhitelistList(next);
+    });
+  });
 }
 
 async function loadHistory() {
@@ -128,6 +195,40 @@ async function init() {
 
   const history = await loadHistory();
   renderHistory(history);
+
+  renderWhitelistList(settings.linkWhitelist || []);
+
+  document.getElementById("whitelist-add").addEventListener("click", async () => {
+    const input = document.getElementById("whitelist-input");
+    const raw = (input.value || "").trim();
+    if (!raw) return;
+    let stored = raw;
+    try {
+      stored = raw.includes("://") ? raw : `https://${raw}`;
+      new URL(stored);
+    } catch {
+      alert(t("whitelist_invalid"));
+      return;
+    }
+    const data = await loadSettings();
+    const list = Array.isArray(data.linkWhitelist) ? [...data.linkWhitelist] : [];
+    const key = normalizeWhitelistKey(stored);
+    if (list.some(e => normalizeWhitelistKey(e) === key)) {
+      input.value = "";
+      return;
+    }
+    list.push(stored);
+    await saveWhitelist(list);
+    input.value = "";
+    renderWhitelistList(list);
+  });
+
+  document.getElementById("whitelist-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      document.getElementById("whitelist-add").click();
+    }
+  });
 
   document.querySelectorAll(".mode-btn").forEach(btn => {
     btn.addEventListener("click", async () => {

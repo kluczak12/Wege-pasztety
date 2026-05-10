@@ -25,7 +25,6 @@
           data-mode="simple"
           type="button"
         >
-          <span class="mode-icon">👶</span>
           <span class="mode-name" data-i18n="mode_simple">Prosty</span>
           <span class="mode-desc" data-i18n="mode_simple_desc">Blokuj i pokazuj ikony</span>
         </button>
@@ -37,11 +36,32 @@
           data-mode="expert"
           type="button"
         >
-          <span class="mode-icon">🔬</span>
           <span class="mode-name" data-i18n="mode_expert">Ekspert</span>
           <span class="mode-desc" data-i18n="mode_expert_desc">Raporty i sandbox</span>
         </button>
       </div>
+    </section>
+
+    <section class="whitelist-section" aria-labelledby="whitelist-label">
+      <p id="whitelist-label" class="section-label" data-i18n="whitelist_title">Zaufane adresy</p>
+      <p class="whitelist-hint" data-i18n="whitelist_hint">
+        Domena (np. example.com) lub pełny URL — jak znane bezpieczne sklepy w whitelist ThinkLink.
+      </p>
+      <div class="whitelist-add-row">
+        <input
+          type="text"
+          id="whitelist-input"
+          class="whitelist-input"
+          placeholder="np. sklep.pl lub https://…"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Adres do whitelisty"
+        />
+        <button type="button" class="whitelist-add-btn" id="whitelist-add" data-i18n="whitelist_add">
+          Dodaj
+        </button>
+      </div>
+      <ul class="whitelist-list" id="whitelist-list" aria-label="Lista zaufanych adresów"></ul>
     </section>
 
     <section class="stats-section" aria-labelledby="stats-label">
