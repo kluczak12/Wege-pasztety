@@ -1322,9 +1322,9 @@
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startScanning);
+    document.addEventListener("DOMContentLoaded", bootstrapThinkLinkUi);
   } else {
-    startScanning();
+    bootstrapThinkLinkUi();
   }
 
 })();
