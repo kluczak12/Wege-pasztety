@@ -93,7 +93,6 @@
       <textarea id="tlpp-textarea" class="tlpp-textarea" rows="10" placeholder="Wklej tutaj treść podejrzanej wiadomości…" maxlength="16000" spellcheck="true" autocomplete="off"></textarea>
       <div class="tlpp-actions">
         <button type="button" class="tlpp-btn tlpp-btn-primary" id="tlpp-analyze">Analizuj</button>
-        <span class="tlpp-hint">Backend ThinkLink + Groq (localhost:8000)</span>
       </div>
       <div class="tlpp-result" id="tlpp-result" hidden>
         <div class="tlpp-meter-wrap">
