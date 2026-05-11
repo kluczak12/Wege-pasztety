@@ -1,6 +1,6 @@
-# Wege-pasztety
+# ThinkLink
 
-Projekt realizowany w ramach Kościuszkonu 2026
+Projekt realizowany w ramach Kościuszkonu 2026 nagrodzony II miejscem w kategorii Cybersecurity Awareness.
 
 ThinkLink to zaawansowana wtyczka do przeglądarki, która zwiększa poziom bezpieczeństwa podczas korzystania z Internetu. Zamiast polegać na statycznych czarnych listach, narzędzie wykorzystuje sztuczną inteligencję i analizę danych w czasie rzeczywistym, aby chronić użytkowników przed phishingiem, złośliwym oprogramowaniem i podejrzanymi przekierowaniami. 
 Obsługiwane przez wtyczkę funkcjonalności to:
